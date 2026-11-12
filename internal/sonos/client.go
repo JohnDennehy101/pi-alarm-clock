@@ -2,10 +2,13 @@ package sonos
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/huin/goupnp"
 	"github.com/huin/goupnp/dcps/av1"
@@ -16,9 +19,19 @@ const (
 
 	deviceDescriptionPath = "/xml/device_description.xml"
 
+	devicePropertiesPath = "/DeviceProperties/Control"
+
+	devicePropertiesSOAPAction = `"urn:schemas-upnp-org:service:DeviceProperty:1#GetZoneAttributes"`
+
 	instanceID uint32 = 0
 	channel           = "Master"
+
+	sonosHTTPTimeout = 2 * time.Second
 )
+
+var sonosHTTPClient = &http.Client{
+	Timeout: sonosHTTPTimeout,
+}
 
 type Speaker struct {
 	Name string
@@ -31,40 +44,25 @@ type Client struct {
 	contentDir  *av1.ContentDirectory1
 }
 
+type GetZoneAttributesResponse struct {
+	Body struct {
+		Response struct {
+			CurrentZoneName string `xml:"CurrentZoneName"`
+		} `xml:"GetZoneAttributesResponse"`
+	} `xml:"Body"`
+}
+
 func DiscoverSpeakers(ctx context.Context) ([]Speaker, error) {
 	devices, err := goupnp.DiscoverDevicesCtx(ctx, sonosDeviceType)
-
 	if err != nil {
 		return nil, fmt.Errorf("discovering Sonos speakers: %w", err)
 	}
 
 	var speakers []Speaker
-
 	for _, device := range devices {
-
-		if device.Err != nil {
-			continue
+		if speaker, ok := parseDevice(ctx, device); ok {
+			speakers = append(speakers, speaker)
 		}
-
-		if device.Root == nil {
-			continue
-		}
-
-		if device.Location == nil {
-			continue
-		}
-
-		host := device.Location.Hostname()
-		ip := net.ParseIP(host)
-
-		if ip == nil {
-			continue
-		}
-
-		speakers = append(speakers, Speaker{
-			Name: device.Root.Device.FriendlyName,
-			IP:   ip.String(),
-		})
 	}
 
 	if len(speakers) == 0 {
@@ -72,6 +70,42 @@ func DiscoverSpeakers(ctx context.Context) ([]Speaker, error) {
 	}
 
 	return speakers, nil
+}
+
+func parseDevice(ctx context.Context, device goupnp.MaybeRootDevice) (Speaker, bool) {
+
+	if device.Err != nil {
+		return Speaker{}, false
+	}
+
+	if device.Root == nil || device.Location == nil {
+		return Speaker{}, false
+	}
+
+	host := device.Location.Hostname()
+
+	ip := net.ParseIP(host)
+
+	if ip == nil {
+		resolved, err := net.LookupIP(host)
+		if err != nil || len(resolved) == 0 {
+			return Speaker{}, false
+		}
+
+		ip = resolved[0]
+	}
+
+	ipStr := ip.String()
+
+	roomName, err := getSonosRoomName(ctx, ipStr)
+	if err != nil {
+		roomName = device.Root.Device.FriendlyName
+	}
+
+	return Speaker{
+		Name: roomName,
+		IP:   ipStr,
+	}, true
 }
 
 func NewClient(ctx context.Context, speakerIP string) (*Client, error) {
@@ -212,4 +246,58 @@ func (c *Client) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func getSonosRoomName(ctx context.Context, ip string) (string, error) {
+	endpoint := fmt.Sprintf(
+		"http://%s%s",
+		net.JoinHostPort(ip, "1400"),
+		devicePropertiesPath,
+	)
+
+	soapBody := `<?xml version="1.0"?>` +
+		`<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
+		`<s:Body>` +
+		`<u:GetZoneAttributes xmlns:u="urn:schemas-upnp-org:service:DeviceProperties:1"></u:GetZoneAttributes>` +
+		`</s:Body>` +
+		`</s:Envelope>`
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		endpoint,
+		strings.NewReader(soapBody),
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "text/xml; charset=\"utf-8\"")
+	req.Header.Set("SOAPAction", "\"urn:schemas-upnp-org:service:DeviceProperty:1#GetZoneAttributes\"")
+
+	resp, err := sonosHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("calling GetZoneAttributes: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("soap status code: %d", resp.StatusCode)
+	}
+
+	var soapResp GetZoneAttributesResponse
+	if err := xml.NewDecoder(resp.Body).Decode(&soapResp); err != nil {
+		return "", err
+	}
+
+	roomName := strings.TrimSpace(
+		soapResp.Body.Response.CurrentZoneName,
+	)
+
+	if roomName == "" {
+		return "", fmt.Errorf("empty zone name returned")
+	}
+
+	return roomName, nil
 }
