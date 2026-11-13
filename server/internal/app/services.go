@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/audio"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
 )
 
 type Services struct {

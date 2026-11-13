@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/api"
-	"github.com/johndennehy101/pi-alarm-clock/internal/app"
-	"github.com/johndennehy101/pi-alarm-clock/internal/audio"
-	"github.com/johndennehy101/pi-alarm-clock/internal/auth"
-	"github.com/johndennehy101/pi-alarm-clock/internal/config"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/api"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/app"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
 )
 
 func main() {

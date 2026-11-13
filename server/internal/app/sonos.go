@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/sonos"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/sonos"
 )
 
 type SonosService struct {

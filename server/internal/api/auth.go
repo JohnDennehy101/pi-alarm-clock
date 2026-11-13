@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
 )
 
 const (

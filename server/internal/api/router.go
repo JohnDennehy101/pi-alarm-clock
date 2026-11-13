@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/app"
-	"github.com/johndennehy101/pi-alarm-clock/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/app"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
 )
 
 type API struct {
