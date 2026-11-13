@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
 )
 
 type deviceIDKey struct{}

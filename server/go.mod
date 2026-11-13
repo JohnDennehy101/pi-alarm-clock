@@ -1,4 +1,4 @@
-module github.com/johndennehy101/pi-alarm-clock
+module github.com/johndennehy101/pi-alarm-clock/server
 
 go 1.27.4
 

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/johndennehy101/pi-alarm-clock/internal/hue"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/hue"
 	"github.com/openhue/openhue-go"
 )
 
