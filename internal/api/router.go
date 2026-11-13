@@ -4,21 +4,26 @@ import (
 	"net/http"
 
 	"github.com/johndennehy101/pi-alarm-clock/internal/app"
-	"github.com/johndennehy101/pi-alarm-clock/internal/audio"
+	"github.com/johndennehy101/pi-alarm-clock/internal/auth"
 )
 
 type API struct {
 	services *app.Services
+	devices  *auth.Store
 }
 
-func NewRouter(services *app.Services, apiToken string) http.Handler {
+func NewRouter(services *app.Services, devices *auth.Store, pairing *PairingHandler) http.Handler {
 	a := &API{
 		services: services,
+		devices:  devices,
 	}
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/v1/health", a.health)
+
+	mux.HandleFunc("GET /api/v1/devices", a.listDevices)
+	mux.HandleFunc("DELETE /api/v1/devices/{id}", a.revokeDevice)
 
 	mux.HandleFunc("GET /api/v1/devices/sonos", a.getSonos)
 	mux.HandleFunc("POST /api/v1/devices/sonos/discover", a.discoverSonos)
@@ -37,12 +42,8 @@ func NewRouter(services *app.Services, apiToken string) http.Handler {
 	mux.HandleFunc("GET /api/v1/audio/radio-stations", a.getRadioStations)
 
 	root := http.NewServeMux()
-	root.Handle("/api/", authMiddleware(mux, apiToken))
-
-	root.Handle(
-		"/audio/",
-		http.StripPrefix("/audio/", audio.Handler()),
-	)
+	root.HandleFunc("POST /api/v1/auth/pair", pairing.Pair)
+	root.Handle("/api/", authMiddleware(mux, devices))
 
 	return root
 }

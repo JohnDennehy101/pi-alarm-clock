@@ -10,9 +10,10 @@ import (
 
 type Config struct {
 	HTTPPort     int
+	AudioPort    int
+	DataDir      string
 	SonosEnabled bool
 	HueAPIKey    string
-	APIToken     string
 }
 
 func Load() (*Config, error) {
@@ -23,21 +24,31 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	audioPort, err := getEnvAsInt("AUDIO_PORT", 8081, 1, 65535)
+	if err != nil {
+		return nil, err
+	}
+
+	if audioPort == port {
+		return nil, fmt.Errorf("AUDIO_PORT (%d) must differ from HTTP_PORT (%d)", audioPort, port)
+	}
+
 	sonosEnabled, err := getEnvAsBool("SONOS_ENABLED", true)
 	if err != nil {
 		return nil, err
 	}
 
-	apiToken, err := getRequiredEnv("API_TOKEN")
-	if err != nil {
-		return nil, err
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "data"
 	}
 
 	return &Config{
 		HTTPPort:     port,
+		AudioPort:    audioPort,
+		DataDir:      dataDir,
 		SonosEnabled: sonosEnabled,
 		HueAPIKey:    os.Getenv("HUE_API_KEY"),
-		APIToken:     apiToken,
 	}, nil
 }
 
@@ -75,12 +86,4 @@ func getEnvAsBool(key string, defaultVal bool) (bool, error) {
 	}
 
 	return parsed, nil
-}
-
-func getRequiredEnv(key string) (string, error) {
-	value := os.Getenv(key)
-	if value == "" {
-		return "", fmt.Errorf("%s not set", key)
-	}
-	return value, nil
 }
