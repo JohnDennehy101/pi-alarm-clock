@@ -149,7 +149,7 @@ class ApiClient {
 
     try {
       await future;
-    } catch (_) {
+    } catch (e) {
       if (identical(_initialization, future)) {
         _initialization = null;
       }
@@ -242,7 +242,10 @@ class ApiClient {
     final key = identity.key;
 
     final existing = _pendingVerifications[key];
-    if (existing != null) return existing;
+
+    if (existing != null) {
+      return existing;
+    }
 
     final verifier = fingerprintVerifier;
 
@@ -250,24 +253,18 @@ class ApiClient {
       return Future<String?>.value(null);
     }
 
-    late final Future<String?> future;
-
-    future = () async {
-      try {
-        final confirmed = await verifier(
-          fingerprint,
-          identityChanged: identityChanged,
-        );
-
-        return confirmed ? fingerprint : null;
-      } finally {
-        if (identical(_pendingVerifications[key], future)) {
-          _pendingVerifications.remove(key);
-        }
-      }
-    }();
+    final future = verifier(
+      fingerprint,
+      identityChanged: identityChanged,
+    ).then<String?>((confirmed) => confirmed ? fingerprint : null);
 
     _pendingVerifications[key] = future;
+
+    future.whenComplete(() {
+      if (identical(_pendingVerifications[key], future)) {
+        _pendingVerifications.remove(key);
+      }
+    }).ignore();
 
     return future;
   }

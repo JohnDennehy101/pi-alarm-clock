@@ -1,13 +1,32 @@
 import 'package:flutter/material.dart';
 
-import '../services/api/api_client.dart';
-import 'startup_gate.dart';
+import '../../app/startup/startup_gate.dart';
+import '../../services/api/api_client.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
   Future<void> _logout(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await _confirmLogout(context);
+
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      await ApiClient.logout();
+    } catch (e) {
+      if (!context.mounted) return;
+
+      _showMessage(context, 'Logout failed: $e');
+      return;
+    }
+
+    if (!context.mounted) return;
+
+    _returnToStartup(context);
+  }
+
+  Future<bool?> _confirmLogout(BuildContext context) {
+    return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Unpair device?'),
@@ -27,24 +46,17 @@ class HomeScreen extends StatelessWidget {
         ],
       ),
     );
+  }
 
-    if (confirmed != true || !context.mounted) return;
-
-    try {
-      await ApiClient.logout();
-    } catch (e) {
-      if (!context.mounted) return;
-
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Logout failed: $e')));
-      return;
-    }
-
-    if (!context.mounted) return;
-
+  void _returnToStartup(BuildContext context) {
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const StartupGate()));
+  }
+
+  void _showMessage(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -62,7 +74,7 @@ class HomeScreen extends StatelessWidget {
       ),
       body: Center(
         child: Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
@@ -80,13 +92,8 @@ class HomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 32),
               ElevatedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Connected to Pi successfully!'),
-                    ),
-                  );
-                },
+                onPressed: () =>
+                    _showMessage(context, 'Connected to Pi successfully!'),
                 icon: const Icon(Icons.refresh),
                 label: const Text('Test API Connection'),
               ),

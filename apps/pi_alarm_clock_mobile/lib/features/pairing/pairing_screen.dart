@@ -1,16 +1,12 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:pi_alarm_clock_mobile/screens/home_screen.dart';
-import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
-import 'package:pi_alarm_clock_mobile/widgets/verify_server_dialog.dart';
 
-import '../services/api/api_client.dart';
+import 'package:pi_alarm_clock_mobile/features/home/home_screen.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/infra/pairing_api_service.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
+import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
 
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key});
-
-  static void navigateHereFromGate() {}
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -19,8 +15,18 @@ class PairingScreen extends StatefulWidget {
 class _PairingScreenState extends State<PairingScreen> {
   final _pinController = TextEditingController();
   final _nameController = TextEditingController(text: 'My Phone');
+
+  late final PairingService _pairingService;
+
   bool _isPairing = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _pairingService = PairingService(api: PairingApiService());
+  }
 
   @override
   void dispose() {
@@ -30,8 +36,20 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   Future<void> _pairWithPi() async {
-    if (_pinController.text.trim().length != 6) {
-      setState(() => _error = 'Please enter the full 6-digit pairing PIN.');
+    final pin = _pinController.text.trim();
+    final deviceName = _nameController.text.trim();
+
+    if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
+      setState(() {
+        _error = 'Please enter the full 6-digit pairing PIN.';
+      });
+      return;
+    }
+
+    if (deviceName.isEmpty || deviceName.length > 64) {
+      setState(() {
+        _error = 'Device name must be between 1 and 64 characters.';
+      });
       return;
     }
 
@@ -40,48 +58,48 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
     });
 
-    ApiClient.fingerprintVerifier = (fingerprint, {required identityChanged}) =>
-        showVerifyServerDialog(
-          context,
-          fingerprint: fingerprint,
-          identityChanged: identityChanged,
-        );
-
     try {
-      final response = await ApiClient.post('/api/v1/auth/pair', {
-        'pin': _pinController.text.trim(),
-        'deviceName': _nameController.text.trim(),
-      });
+      final result = await _pairingService.pair(
+        pin: pin,
+        deviceName: deviceName,
+      );
 
-      if (response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        final token = data['token'];
+      if (!mounted) return;
 
-        await ApiClient.storage.write(key: 'auth_token', value: token);
-
-        if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-      } else if (response.statusCode == 429) {
-        setState(
-          () => _error = 'Too many failed attempts. Locked out for 15 minutes.',
-        );
-      } else {
-        setState(
-          () => _error =
-              'Invalid PIN or connection error (${response.statusCode})',
-        );
+      switch (result) {
+        case PairingResult.success:
+          _navigateToHome();
+        case PairingResult.tooManyAttempts:
+          _showError('Too many failed attempts. Locked out for 15 minutes.');
+        case PairingResult.invalidPin:
+          _showError('Invalid pairing PIN.');
+        case PairingResult.unexpectedResponse:
+          _showError('Unexpected response from Raspberry Pi.');
       }
     } on ServerNotVerifiedException catch (e) {
-      setState(() => _error = e.message);
+      _showError(e.message);
     } catch (e) {
-      setState(() => _error = 'Failed to reach server: $e');
+      _showError('Failed to reach server: $e');
     } finally {
       if (mounted) {
-        setState(() => _isPairing = false);
+        setState(() {
+          _isPairing = false;
+        });
       }
     }
+  }
+
+  void _navigateToHome() {
+    Navigator.of(context)
+        .pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+
+    setState(() {
+      _error = message;
+    });
   }
 
   @override
@@ -90,9 +108,8 @@ class _PairingScreenState extends State<PairingScreen> {
       appBar: AppBar(title: const Text('Pair with Raspberry Pi')),
       body: Center(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.all(24),
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Icon(
@@ -108,12 +125,12 @@ class _PairingScreenState extends State<PairingScreen> {
               ),
               const SizedBox(height: 8),
               const Text(
-                'Check your Raspberry Pi startup logs for the active 6-digit pairing PIN.',
+                'Check your Raspberry Pi startup logs for the active '
+                '6-digit pairing PIN.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey, fontSize: 14),
               ),
               const SizedBox(height: 32),
-
               TextField(
                 controller: _pinController,
                 keyboardType: TextInputType.number,
@@ -126,16 +143,15 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-
               TextField(
                 controller: _nameController,
+                maxLength: 64,
                 decoration: const InputDecoration(
                   labelText: 'Device Name',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.phone_android),
                 ),
               ),
-
               if (_error != null) ...[
                 const SizedBox(height: 16),
                 Container(
@@ -152,9 +168,7 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               ],
-
               const SizedBox(height: 24),
-
               ElevatedButton(
                 onPressed: _isPairing ? null : _pairWithPi,
                 style: ElevatedButton.styleFrom(
