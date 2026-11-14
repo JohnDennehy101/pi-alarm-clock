@@ -29,9 +29,7 @@ Future<bool> showVerifyServerDialog(
         color: identityChanged ? Colors.orange : Colors.deepPurple,
       ),
       title: Text(
-        identityChanged
-            ? 'Server identity changed'
-            : 'New server detected',
+        identityChanged ? 'Server identity changed' : 'New server detected',
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,

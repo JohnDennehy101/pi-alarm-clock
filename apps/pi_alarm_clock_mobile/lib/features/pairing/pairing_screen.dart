@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:pi_alarm_clock_mobile/features/home/home_screen.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/infra/pairing_api_service.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/widgets/pin_input.dart';
 import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
 
 class PairingScreen extends StatefulWidget {
@@ -13,10 +14,18 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  final _pinController = TextEditingController();
-  final _nameController = TextEditingController(text: 'My Phone');
+  final _nameController = TextEditingController();
 
   late final PairingService _pairingService;
+
+  bool get _canPair {
+    return RegExp(r'^\d{6}$').hasMatch(_pin) &&
+        _nameController.text.trim().isNotEmpty &&
+        _nameController.text.trim().length <= 64 &&
+        !_isPairing;
+  }
+
+  String _pin = '';
 
   bool _isPairing = false;
   String? _error;
@@ -30,13 +39,12 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   void dispose() {
-    _pinController.dispose();
     _nameController.dispose();
     super.dispose();
   }
 
   Future<void> _pairWithPi() async {
-    final pin = _pinController.text.trim();
+    final pin = _pin;
     final deviceName = _nameController.text.trim();
 
     if (!RegExp(r'^\d{6}$').hasMatch(pin)) {
@@ -69,10 +77,13 @@ class _PairingScreenState extends State<PairingScreen> {
       switch (result) {
         case PairingResult.success:
           _navigateToHome();
+
         case PairingResult.tooManyAttempts:
           _showError('Too many failed attempts. Locked out for 15 minutes.');
+
         case PairingResult.invalidPin:
           _showError('Invalid pairing PIN.');
+
         case PairingResult.unexpectedResponse:
           _showError('Unexpected response from Raspberry Pi.');
       }
@@ -131,27 +142,32 @@ class _PairingScreenState extends State<PairingScreen> {
                 style: TextStyle(color: Colors.grey, fontSize: 14),
               ),
               const SizedBox(height: 32),
-              TextField(
-                controller: _pinController,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                decoration: const InputDecoration(
-                  labelText: '6-Digit PIN',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.lock_outline),
-                  counterText: '',
-                ),
+
+              PinInput(
+                length: 6,
+                enabled: !_isPairing,
+                onChanged: (pin) {
+                  setState(() {
+                    _pin = pin;
+                    _error = null;
+                  });
+                },
               ),
-              const SizedBox(height: 16),
+
+              const SizedBox(height: 24),
+
               TextField(
                 controller: _nameController,
+                enabled: !_isPairing,
                 maxLength: 64,
+                onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(
                   labelText: 'Device Name',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.phone_android),
                 ),
               ),
+
               if (_error != null) ...[
                 const SizedBox(height: 16),
                 Container(
@@ -168,9 +184,11 @@ class _PairingScreenState extends State<PairingScreen> {
                   ),
                 ),
               ],
+
               const SizedBox(height: 24),
+
               ElevatedButton(
-                onPressed: _isPairing ? null : _pairWithPi,
+                onPressed: _canPair ? _pairWithPi : null,
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   backgroundColor: Colors.deepPurple,
