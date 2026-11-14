@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:kiwi/kiwi.dart';
+import 'package:provider/provider.dart';
 import 'package:pi_alarm_clock_mobile/app/app.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
 import 'package:pi_alarm_clock_mobile/di.dart';
@@ -12,8 +13,11 @@ Widget bootstrap() {
   final startupService = container.resolve<StartupService>();
   final pairingService = container.resolve<PairingService>();
 
-  return PiAlarmClockApp(
-    startupService: startupService,
-    pairingService: pairingService,
+  return MultiProvider(
+    providers: [
+      Provider<StartupService>.value(value: startupService),
+      Provider<PairingService>.value(value: pairingService),
+    ],
+    child: const PiAlarmClockApp(),
   );
 }

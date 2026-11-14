@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
+import 'package:provider/provider.dart';
 
 import 'package:pi_alarm_clock_mobile/features/home/home_screen.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
@@ -7,14 +7,7 @@ import 'package:pi_alarm_clock_mobile/features/pairing/widgets/pin_input.dart';
 import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
 
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({
-    super.key,
-    required this.pairingService,
-    required this.startupService,
-  });
-
-  final PairingService pairingService;
-  final StartupService startupService;
+  const PairingScreen({super.key});
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -22,9 +15,6 @@ class PairingScreen extends StatefulWidget {
 
 class _PairingScreenState extends State<PairingScreen> {
   final _nameController = TextEditingController();
-
-  late final PairingService _pairingService;
-  late final StartupService _startupService;
 
   bool get _canPair {
     return RegExp(r'^\d{6}$').hasMatch(_pin) &&
@@ -41,9 +31,6 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   void initState() {
     super.initState();
-
-    _pairingService = widget.pairingService;
-    _startupService = widget.startupService;
   }
 
   @override
@@ -75,8 +62,10 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
     });
 
+    final pairingService = context.read<PairingService>();
+
     try {
-      final result = await _pairingService.pair(
+      final result = await pairingService.pair(
         pin: pin,
         deviceName: deviceName,
       );
@@ -110,14 +99,8 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   void _navigateToHome() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => HomeScreen(
-          startupService: _startupService,
-          pairingService: _pairingService,
-        ),
-      ),
-    );
+    Navigator.of(context)
+        .pushReplacement(MaterialPageRoute(builder: (_) => HomeScreen()));
   }
 
   void _showError(String message) {
