@@ -26,9 +26,14 @@ class _Handshake {
 }
 
 class ApiClient {
-  static const storage = FlutterSecureStorage(
-    mOptions: MacOsOptions(useDataProtectionKeyChain: false),
-  );
+  ApiClient({FlutterSecureStorage? storage})
+    : storage =
+          storage ??
+          const FlutterSecureStorage(
+            mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+          );
+
+  final FlutterSecureStorage storage;
 
   static const _tokenKey = 'auth_token';
   static const _fingerprintKey = 'server_fingerprint';
@@ -36,11 +41,11 @@ class ApiClient {
   static const _requestTimeout = Duration(seconds: 6);
   static const _connectionTimeout = Duration(seconds: 4);
 
-  static String? _serverBaseUrl;
+  String? _serverBaseUrl;
 
-  static String? get serverBaseUrl => _serverBaseUrl;
+  String? get serverBaseUrl => _serverBaseUrl;
 
-  static void setServerBaseUrl(String url) {
+  void setServerBaseUrl(String url) {
     final Uri uri;
 
     try {
@@ -81,7 +86,7 @@ class ApiClient {
     _pendingVerifications.clear();
   }
 
-  static bool _isValidHttpsUri(Uri uri) =>
+  bool _isValidHttpsUri(Uri uri) =>
       _hasHttpsScheme(uri) &&
       _hasHost(uri) &&
       _hasNoUserInfo(uri) &&
@@ -89,25 +94,24 @@ class ApiClient {
       _hasValidPath(uri) &&
       _hasValidPort(uri);
 
-  static bool _hasHttpsScheme(Uri uri) => uri.scheme.toLowerCase() == 'https';
+  bool _hasHttpsScheme(Uri uri) => uri.scheme.toLowerCase() == 'https';
 
-  static bool _hasHost(Uri uri) => uri.host.isNotEmpty;
+  bool _hasHost(Uri uri) => uri.host.isNotEmpty;
 
-  static bool _hasNoUserInfo(Uri uri) => uri.userInfo.isEmpty;
+  bool _hasNoUserInfo(Uri uri) => uri.userInfo.isEmpty;
 
-  static bool _hasNoQueryOrFragment(Uri uri) =>
-      !uri.hasQuery && !uri.hasFragment;
+  bool _hasNoQueryOrFragment(Uri uri) => !uri.hasQuery && !uri.hasFragment;
 
-  static bool _hasValidPath(Uri uri) => uri.path.isEmpty || uri.path == '/';
+  bool _hasValidPath(Uri uri) => uri.path.isEmpty || uri.path == '/';
 
-  static bool _hasValidPort(Uri uri) => uri.port >= 1 && uri.port <= 65535;
+  bool _hasValidPort(Uri uri) => uri.port >= 1 && uri.port <= 65535;
 
-  static void setServerBaseUrlFromDevice(DiscoveredDevice device) {
+  void setServerBaseUrlFromDevice(DiscoveredDevice device) {
     final baseUrl = getBaseUrl(device);
     setServerBaseUrl(baseUrl);
   }
 
-  static String getBaseUrl(DiscoveredDevice device) {
+  String getBaseUrl(DiscoveredDevice device) {
     if (io.Platform.isMacOS) {
       return 'https://localhost:${device.port}';
     }
@@ -119,23 +123,20 @@ class ApiClient {
     ).toString();
   }
 
-  static Future<bool> Function(
-    String fingerprint, {
-    required bool identityChanged,
-  })?
+  Future<bool> Function(String fingerprint, {required bool identityChanged})?
   fingerprintVerifier;
 
-  static _Pin? _pin;
+  _Pin? _pin;
 
-  static Future<void>? _initialization;
+  Future<void>? _initialization;
 
-  static int _pairingGeneration = 0;
+  int _pairingGeneration = 0;
 
-  static final Map<String, Future<String?>> _pendingVerifications = {};
+  final Map<String, Future<String?>> _pendingVerifications = {};
 
-  static Future<void> _pinWrites = Future<void>.value();
+  Future<void> _pinWrites = Future<void>.value();
 
-  static Future<void> _init() async {
+  Future<void> _init() async {
     final existing = _initialization;
 
     if (existing != null) {
@@ -158,7 +159,7 @@ class ApiClient {
     }
   }
 
-  static Future<void> _loadPin(int generation) async {
+  Future<void> _loadPin(int generation) async {
     final stored = await storage.read(key: _fingerprintKey);
 
     if (generation != _pairingGeneration) return;
@@ -166,7 +167,7 @@ class ApiClient {
     _pin = _Pin.decode(stored);
   }
 
-  static io.HttpClient _createPinnedClient(_Handshake handshake) {
+  io.HttpClient _createPinnedClient(_Handshake handshake) {
     final context = io.SecurityContext(withTrustedRoots: false);
 
     final client = io.HttpClient(context: context)
@@ -180,7 +181,7 @@ class ApiClient {
     return client;
   }
 
-  static bool _verifyCertificate(
+  bool _verifyCertificate(
     io.X509Certificate cert,
     String host,
     int port,
@@ -234,7 +235,7 @@ class ApiClient {
     return false;
   }
 
-  static Future<String?> _prompt(
+  Future<String?> _prompt(
     _ServerIdentity identity,
     String fingerprint,
     bool identityChanged,
@@ -269,7 +270,7 @@ class ApiClient {
     return future;
   }
 
-  static Future<void> _trustFingerprint(_Pin pin, int generation) {
+  Future<void> _trustFingerprint(_Pin pin, int generation) {
     final operation = _pinWrites.catchError((_) {}).then((_) async {
       if (generation != _pairingGeneration) {
         throw ServerNotVerifiedException('Device pairing was cancelled.');
@@ -308,7 +309,7 @@ class ApiClient {
     );
   }
 
-  static Future<http.Response> _send(
+  Future<http.Response> _send(
     Future<http.Response> Function() attempt,
     _Handshake handshake,
     int generation,
@@ -401,7 +402,7 @@ class ApiClient {
     }
   }
 
-  static Uri _buildRequestUri(String baseUrl, String endpoint) {
+  Uri _buildRequestUri(String baseUrl, String endpoint) {
     if (!endpoint.startsWith('/') ||
         endpoint.startsWith('//') ||
         endpoint.contains(r'\')) {
@@ -432,7 +433,7 @@ class ApiClient {
     return Uri.parse(baseUrl).resolveUri(path);
   }
 
-  static Future<http.Response> get(String endpoint) async {
+  Future<http.Response> get(String endpoint) async {
     final baseUrl = _serverBaseUrl;
 
     if (baseUrl == null) {
@@ -464,10 +465,7 @@ class ApiClient {
     }
   }
 
-  static Future<http.Response> post(
-    String endpoint,
-    Map<String, dynamic> body,
-  ) async {
+  Future<http.Response> post(String endpoint, Map<String, dynamic> body) async {
     final baseUrl = _serverBaseUrl;
 
     if (baseUrl == null) {
@@ -503,7 +501,7 @@ class ApiClient {
     }
   }
 
-  static Future<http.Response> delete(String endpoint) async {
+  Future<http.Response> delete(String endpoint) async {
     final baseUrl = _serverBaseUrl;
 
     if (baseUrl == null) {
@@ -535,7 +533,7 @@ class ApiClient {
     }
   }
 
-  static Future<void> forgetDevice() async {
+  Future<void> forgetDevice() async {
     _pairingGeneration++;
 
     _pin = null;
@@ -553,7 +551,7 @@ class ApiClient {
 
   static const _deviceIdKey = 'device_id';
 
-  static Future<void> logout() async {
+  Future<void> logout() async {
     final deviceId = await storage.read(key: _deviceIdKey);
 
     try {
@@ -564,5 +562,17 @@ class ApiClient {
       await forgetDevice();
       await storage.delete(key: _deviceIdKey);
     }
+  }
+
+  Future<void> saveAuthToken(String token) async {
+    await storage.write(key: _tokenKey, value: token);
+  }
+
+  Future<String?> readAuthToken() {
+    return storage.read(key: _tokenKey);
+  }
+
+  Future<void> deleteAuthToken() async {
+    await storage.delete(key: _tokenKey);
   }
 }

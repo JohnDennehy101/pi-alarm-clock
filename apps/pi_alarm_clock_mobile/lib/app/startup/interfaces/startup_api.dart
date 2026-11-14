@@ -8,4 +8,6 @@ abstract interface class StartupApi {
   Future<int> checkHealth();
 
   Future<void> deleteAuthToken();
+
+  Future<void> logout();
 }

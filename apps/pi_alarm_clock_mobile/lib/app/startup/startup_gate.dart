@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
 
-import 'package:pi_alarm_clock_mobile/app/navigation/app_navigator.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_destination.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
-import 'package:pi_alarm_clock_mobile/app/startup/infra/startup_api_service.dart';
-import 'package:pi_alarm_clock_mobile/app/startup/infra/startup_device_discovery_service.dart';
-import 'package:pi_alarm_clock_mobile/services/api/api_client.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
 import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
-import 'package:pi_alarm_clock_mobile/services/device_discovery/device_discovery_service.dart';
-import 'package:pi_alarm_clock_mobile/widgets/verify_server_dialog.dart';
 
 import '../../features/home/home_screen.dart';
 import '../../features/pairing/pairing_screen.dart';
 
 class StartupGate extends StatefulWidget {
-  const StartupGate({super.key});
+  const StartupGate({
+    super.key,
+    required this.startupService,
+    required this.pairingService,
+  });
+
+  final StartupService startupService;
+  final PairingService pairingService;
 
   @override
   State<StartupGate> createState() => _StartupGateState();
@@ -22,6 +24,7 @@ class StartupGate extends StatefulWidget {
 
 class _StartupGateState extends State<StartupGate> {
   late final StartupService _startupService;
+  late final PairingService _pairingService;
 
   bool _isLoading = true;
   String? _errorMessage;
@@ -29,32 +32,9 @@ class _StartupGateState extends State<StartupGate> {
   @override
   void initState() {
     super.initState();
-
-    _startupService = StartupService(
-      discovery: StartupDeviceDiscoveryService(DeviceDiscoveryService()),
-      api: StartupApiService(),
-    );
-
-    _configureCertificateVerification();
-
+    _startupService = widget.startupService;
+    _pairingService = widget.pairingService;
     _start();
-  }
-
-  void _configureCertificateVerification() {
-    ApiClient.fingerprintVerifier =
-        (fingerprint, {required identityChanged}) async {
-          final context = AppNavigator.context;
-
-          if (context == null) {
-            return false;
-          }
-
-          return showVerifyServerDialog(
-            context,
-            fingerprint: fingerprint,
-            identityChanged: identityChanged,
-          );
-        };
   }
 
   Future<void> _start() async {
@@ -76,8 +56,14 @@ class _StartupGateState extends State<StartupGate> {
 
   void _navigateTo(StartupDestination destination) {
     final Widget screen = switch (destination) {
-      StartupDestination.pairing => const PairingScreen(),
-      StartupDestination.home => const HomeScreen(),
+      StartupDestination.pairing => PairingScreen(
+        pairingService: _pairingService,
+        startupService: _startupService,
+      ),
+      StartupDestination.home => HomeScreen(
+        startupService: _startupService,
+        pairingService: _pairingService,
+      ),
     };
 
     Navigator.of(context)
@@ -103,9 +89,14 @@ class _StartupGateState extends State<StartupGate> {
   }
 
   void _enterPairingMode() {
-    Navigator.of(
-      context,
-    ).pushReplacement(MaterialPageRoute(builder: (_) => const PairingScreen()));
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => PairingScreen(
+          pairingService: _pairingService,
+          startupService: _startupService,
+        ),
+      ),
+    );
   }
 
   @override

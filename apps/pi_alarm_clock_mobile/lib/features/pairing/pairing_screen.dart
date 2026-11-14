@@ -1,13 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
 
 import 'package:pi_alarm_clock_mobile/features/home/home_screen.dart';
-import 'package:pi_alarm_clock_mobile/features/pairing/infra/pairing_api_service.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/widgets/pin_input.dart';
 import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
 
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({super.key});
+  const PairingScreen({
+    super.key,
+    required this.pairingService,
+    required this.startupService,
+  });
+
+  final PairingService pairingService;
+  final StartupService startupService;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -17,6 +24,7 @@ class _PairingScreenState extends State<PairingScreen> {
   final _nameController = TextEditingController();
 
   late final PairingService _pairingService;
+  late final StartupService _startupService;
 
   bool get _canPair {
     return RegExp(r'^\d{6}$').hasMatch(_pin) &&
@@ -34,7 +42,8 @@ class _PairingScreenState extends State<PairingScreen> {
   void initState() {
     super.initState();
 
-    _pairingService = PairingService(api: PairingApiService());
+    _pairingService = widget.pairingService;
+    _startupService = widget.startupService;
   }
 
   @override
@@ -101,8 +110,14 @@ class _PairingScreenState extends State<PairingScreen> {
   }
 
   void _navigateToHome() {
-    Navigator.of(context)
-        .pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => HomeScreen(
+          startupService: _startupService,
+          pairingService: _pairingService,
+        ),
+      ),
+    );
   }
 
   void _showError(String message) {
