@@ -75,8 +75,15 @@ func generateServerCert(certFile, keyFile string) error {
 		NotAfter:    time.Now().Add(certValidity),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:    []string{"pi-alarm-clock.local"},
-		IPAddresses: localIPv4s(),
+		DNSNames: []string{
+			"pi-alarm-clock.local",
+			"localhost",
+		},
+		IPAddresses: append(
+			localIPv4s(),
+			net.ParseIP("127.0.0.1"),
+			net.ParseIP("::1"),
+		),
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
