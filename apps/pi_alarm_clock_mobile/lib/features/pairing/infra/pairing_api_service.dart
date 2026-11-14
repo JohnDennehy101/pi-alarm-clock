@@ -4,9 +4,13 @@ import 'package:pi_alarm_clock_mobile/features/pairing/interfaces/pairing_api.da
 import 'package:pi_alarm_clock_mobile/services/api/api_client.dart';
 
 class PairingApiService implements PairingApi {
+  PairingApiService(this._apiClient);
+
+  final ApiClient _apiClient;
+
   @override
   Future<int> pair({required String pin, required String deviceName}) async {
-    final response = await ApiClient.post('/api/v1/auth/pair', {
+    final response = await _apiClient.post('/api/v1/auth/pair', {
       'pin': pin,
       'deviceName': deviceName,
     });
@@ -22,13 +26,9 @@ class PairingApiService implements PairingApi {
         throw const FormatException('Invalid pairing response.');
       }
 
-      await saveAuthToken(data['token'] as String);
+      await _apiClient.saveAuthToken(data['token'] as String);
     }
 
     return response.statusCode;
-  }
-
-  Future<void> saveAuthToken(String token) async {
-    await ApiClient.storage.write(key: 'auth_token', value: token);
   }
 }

@@ -38,4 +38,8 @@ class StartupService {
         throw UnexpectedServerResponseException(statusCode);
     }
   }
+
+  Future<void> logout() async {
+    await api.logout();
+  }
 }
