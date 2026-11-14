@@ -9,7 +9,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  basic_utils: ^5.7.0
   cupertino_icons: ^1.0.8
+  http: ^1.2.0
+  flutter_secure_storage: ^9.0.0
+  crypto: ^3.0.3
+  nsd: ^5.0.1
 
 dev_dependencies:
   flutter_test:

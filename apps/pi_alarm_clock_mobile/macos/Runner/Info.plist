@@ -28,5 +28,12 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>This app needs local network access to discover and connect to the Raspberry Pi alarm clock.</string>
+
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pialarmclock._tcp</string>
+	</array>
 </dict>
 </plist>

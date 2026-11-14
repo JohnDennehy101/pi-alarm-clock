@@ -66,5 +66,14 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>
+  		This app needs local network access to discover and connect to your Raspberry Pi alarm clock.
+	</string>
+
+	<key>NSBonjourServices</key>
+	<array>
+    	<string>_pialarmclock._tcp</string>
+	</array>
 </dict>
 </plist>

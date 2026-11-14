@@ -2,7 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Sandbox disabled for local sideloaded builds: no Apple development
+	     certificate exists on this machine, so sandboxed builds cannot
+	     obtain keychain access. If this app is ever distributed, re-enable
+	     the sandbox and sign with a real team. -->
 	<key>com.apple.security.app-sandbox</key>
-	<true/>
+	<false/>
 </dict>
 </plist>
