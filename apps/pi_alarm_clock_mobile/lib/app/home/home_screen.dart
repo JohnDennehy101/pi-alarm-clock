@@ -1,20 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../../app/startup/startup_gate.dart';
 import '../../app/startup/startup_service.dart';
-import '../../features/pairing/pairing_service.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({
-    super.key,
-    required this.startupService,
-    required this.pairingService,
-  });
-
-  final StartupService startupService;
-  final PairingService pairingService;
+  const HomeScreen({super.key});
 
   Future<void> _logout(BuildContext context) async {
+    final startupService = context.read<StartupService>();
     final confirmed = await _confirmLogout(context);
 
     if (confirmed != true || !context.mounted) return;
@@ -57,14 +51,8 @@ class HomeScreen extends StatelessWidget {
   }
 
   void _returnToStartup(BuildContext context) {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => StartupGate(
-          startupService: startupService,
-          pairingService: pairingService,
-        ),
-      ),
-    );
+    Navigator.of(context)
+        .pushReplacement(MaterialPageRoute(builder: (_) => StartupGate()));
   }
 
   void _showMessage(BuildContext context, String message) {

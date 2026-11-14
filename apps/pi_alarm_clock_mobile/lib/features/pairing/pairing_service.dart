@@ -1,4 +1,4 @@
-import 'package:pi_alarm_clock_mobile/features/pairing/interfaces/pairing_api.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/domain/interfaces/pairing_api.dart';
 
 enum PairingResult { success, tooManyAttempts, invalidPin, unexpectedResponse }
 

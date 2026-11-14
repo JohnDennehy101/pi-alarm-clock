@@ -5,12 +5,12 @@ import 'package:pi_alarm_clock_mobile/app/startup/infra/startup_device_discovery
 import 'package:pi_alarm_clock_mobile/app/startup/interfaces/startup_api.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/interfaces/startup_device_discovery.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/domain/interfaces/pairing_api.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/infra/pairing_api_service.dart';
-import 'package:pi_alarm_clock_mobile/features/pairing/interfaces/pairing_api.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
 import 'package:pi_alarm_clock_mobile/services/api/api_client.dart';
 import 'package:pi_alarm_clock_mobile/services/device_discovery/device_discovery_service.dart';
-import 'package:pi_alarm_clock_mobile/widgets/verify_server_dialog.dart';
+import 'package:pi_alarm_clock_mobile/widgets/shared/verify_server_dialog.dart';
 
 void setupDependencies() {
   final container = KiwiContainer();
