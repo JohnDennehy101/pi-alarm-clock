@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:pi_alarm_clock_mobile/features/pairing/interfaces/pairing_api.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/domain/interfaces/pairing_api.dart';
 import 'package:pi_alarm_clock_mobile/services/api/api_client.dart';
 
 class PairingApiService implements PairingApi {
