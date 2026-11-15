@@ -28,7 +28,7 @@ class StartupService {
 
     switch (statusCode) {
       case 200:
-        return StartupDestination.home;
+        return StartupDestination.overview;
 
       case 401:
         await api.deleteAuthToken();

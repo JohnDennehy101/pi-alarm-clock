@@ -16,7 +16,7 @@ class PairingScreen extends StatelessWidget {
 
     if (!context.mounted || !success) return;
 
-    context.go('/home');
+    context.go('/');
   }
 
   @override
