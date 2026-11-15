@@ -17,6 +17,8 @@ import (
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/database"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/scheduler"
 )
 
 func main() {
@@ -33,6 +35,8 @@ type application struct {
 	keyFile      string
 	pin          string
 	fingerprint  string
+	db           *database.Database
+	scheduler    *scheduler.Scheduler
 }
 
 func run() error {
@@ -52,6 +56,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer app.db.Close()
 
 	app.logStartup()
 
@@ -59,15 +64,27 @@ func run() error {
 }
 
 func newApplication(ctx context.Context, cfg *config.Config) (*application, error) {
+	db, err := database.New(ctx, cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("initialising database: %w", err)
+	}
+
 	services, err := app.NewServices(
 		ctx,
 		cfg.AudioPort,
 		cfg.HueAPIKey,
 		cfg.SonosEnabled,
+		db.AlarmRepository,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialising services: %w", err)
 	}
+
+	alarmScheduler := scheduler.New(
+		services.Alarm,
+		services.Executor,
+		time.Local,
+	)
 
 	deviceStore, err := auth.OpenStore(filepath.Join(cfg.DataDir, "devices.json"))
 	if err != nil {
@@ -90,6 +107,8 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		keyFile:      keyFile,
 		pin:          pin,
 		fingerprint:  fingerprint,
+		db:           db,
+		scheduler:    alarmScheduler,
 	}, nil
 }
 
@@ -111,6 +130,19 @@ func serve(ctx context.Context, app *application) error {
 	audioServer := newServer(app.cfg.AudioPort, app.audioHandler)
 
 	serverErrors := make(chan error, 2)
+
+	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+	schedulerDone := make(chan struct{})
+
+	go func() {
+		defer close(schedulerDone)
+		app.scheduler.Run(schedulerCtx)
+	}()
+
+	defer func() {
+		cancelScheduler()
+		<-schedulerDone
+	}()
 
 	go func() {
 		log.Printf("HTTPS API listening on port %d", app.cfg.HTTPPort)

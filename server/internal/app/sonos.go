@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/alarm"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/sonos"
 )
 
@@ -332,6 +334,100 @@ func (s *SonosService) SetGroupVolume(
 	return nil
 }
 
+func (s *SonosService) PlaySpeakerURI(
+	ctx context.Context,
+	speakerID string,
+	uri string,
+	metadata string,
+) error {
+	return s.withSpeakerClient(ctx, speakerID, func(c *sonos.Client) error {
+		return c.PlayURI(ctx, uri, metadata)
+	})
+}
+
+func (s *SonosService) PlaySpeakerRadioStation(
+	ctx context.Context,
+	speakerID string,
+	name string,
+) error {
+	return s.withSpeakerClient(ctx, speakerID, func(c *sonos.Client) error {
+		return c.PlayRadioStation(ctx, name)
+	})
+}
+
+func (s *SonosService) SetSpeakerVolume(
+	ctx context.Context,
+	speakerID string,
+	volume int,
+) error {
+	return s.withSpeakerClient(ctx, speakerID, func(c *sonos.Client) error {
+		return c.SetVolume(ctx, volume)
+	})
+}
+
+func (s *SonosService) SetTargetVolume(
+	ctx context.Context,
+	target alarm.SonosTarget,
+	volume int,
+) error {
+	switch target.Type {
+	case alarm.TargetSpeaker:
+		return s.SetSpeakerVolume(ctx, target.ID, volume)
+
+	case alarm.TargetGroup:
+		return s.SetGroupVolume(ctx, target.ID, volume)
+
+	default:
+		return fmt.Errorf("unsupported Sonos target type %q", target.Type)
+	}
+}
+
+func (s *SonosService) RunGradualVolume(
+	ctx context.Context,
+	target alarm.SonosTarget,
+	targetVolume int,
+	duration time.Duration,
+) error {
+	if targetVolume < 0 || targetVolume > 100 {
+		return fmt.Errorf("volume must be between 0 and 100")
+	}
+
+	if duration <= 0 {
+		return fmt.Errorf("volume duration must be greater than zero")
+	}
+
+	const steps = 10
+
+	stepDelay := duration / steps
+	if stepDelay <= 0 {
+		return fmt.Errorf("volume duration is too short")
+	}
+
+	for step := 1; step <= steps; step++ {
+		timer := time.NewTimer(stepDelay)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+
+		case <-timer.C:
+		}
+
+		volume := targetVolume * step / steps
+
+		if err := s.SetTargetVolume(ctx, target, volume); err != nil {
+			return fmt.Errorf(
+				"setting Sonos volume to %d%%: %w",
+				volume,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
 func (s *SonosService) withGroupClient(
 	ctx context.Context,
 	groupID string,
@@ -343,4 +439,40 @@ func (s *SonosService) withGroupClient(
 	}
 
 	return fn(client)
+}
+
+func (s *SonosService) withSpeakerClient(
+	ctx context.Context,
+	speakerID string,
+	fn func(*sonos.Client) error,
+) error {
+	client, err := s.speakerClient(ctx, speakerID)
+	if err != nil {
+		return err
+	}
+
+	return fn(client)
+}
+
+func (s *SonosService) speakerClient(
+	ctx context.Context,
+	speakerID string,
+) (*sonos.Client, error) {
+	speakers := s.Speakers()
+
+	speaker, err := sonos.FindSpeaker(speakers, speakerID)
+	if err != nil {
+		return nil, fmt.Errorf("finding speaker %q: %w", speakerID, err)
+	}
+
+	client, err := sonos.NewClient(ctx, speaker.IP)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"connecting to speaker %q: %w",
+			speaker.Name,
+			err,
+		)
+	}
+
+	return client, nil
 }
