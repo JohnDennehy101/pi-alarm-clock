@@ -221,13 +221,12 @@ func NewDiscoveredClient(
 		return nil, err
 	}
 
-	for _, speaker := range speakers {
-		if speaker.ID == speakerID {
-			return NewClient(ctx, speaker.IP)
-		}
+	speaker, err := FindSpeaker(speakers, speakerID)
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("Sonos speaker %q not found", speakerID)
+	return NewClient(ctx, speaker.IP)
 }
 
 func (c *Client) PlayURI(
@@ -337,4 +336,37 @@ func getSonosRoomName(ctx context.Context, ip string) (string, error) {
 	}
 
 	return roomName, nil
+}
+
+func NewGroupClient(
+	ctx context.Context,
+	group Group,
+	speakers []Speaker,
+) (*Client, error) {
+	coordinator, err := FindSpeaker(speakers, group.CoordinatorID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding coordinator for group %q: %w",
+			group.ID,
+			err,
+		)
+	}
+
+	return NewClient(ctx, coordinator.IP)
+}
+
+func FindSpeaker(
+	speakers []Speaker,
+	speakerID string,
+) (Speaker, error) {
+	for _, speaker := range speakers {
+		if speaker.ID == speakerID {
+			return speaker, nil
+		}
+	}
+
+	return Speaker{}, fmt.Errorf(
+		"Sonos speaker %q not found",
+		speakerID,
+	)
 }
