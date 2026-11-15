@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/alarm"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
 )
 
@@ -11,6 +12,7 @@ type Services struct {
 	Sonos *SonosService
 	Hue   *HueService
 	Audio *audio.AudioManager
+	Alarm *AlarmService
 }
 
 func NewServices(
@@ -18,10 +20,12 @@ func NewServices(
 	audioPort int,
 	hueAPIKey string,
 	sonosEnabled bool,
+	alarmRepository alarm.Repository,
 ) (*Services, error) {
 	services := &Services{
 		Sonos: NewSonosService(),
 		Hue:   NewHueService(hueAPIKey),
+		Alarm: NewAlarmService(alarmRepository),
 	}
 
 	services.initAudio(audioPort)

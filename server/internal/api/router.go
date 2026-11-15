@@ -47,6 +47,12 @@ func NewRouter(services *app.Services, devices *auth.Store, pairing *PairingHand
 	mux.HandleFunc("PUT /api/v1/audio/volume", a.setVolume)
 	mux.HandleFunc("GET /api/v1/audio/radio-stations", a.getRadioStations)
 
+	mux.HandleFunc("GET /api/v1/alarms", a.listAlarms)
+	mux.HandleFunc("POST /api/v1/alarms", a.createAlarm)
+	mux.HandleFunc("GET /api/v1/alarms/{id}", a.getAlarm)
+	mux.HandleFunc("PUT /api/v1/alarms/{id}", a.updateAlarm)
+	mux.HandleFunc("DELETE /api/v1/alarms/{id}", a.deleteAlarm)
+
 	root := http.NewServeMux()
 	root.HandleFunc("POST /api/v1/auth/pair", pairing.Pair)
 	root.Handle("/api/", authMiddleware(mux, devices))
