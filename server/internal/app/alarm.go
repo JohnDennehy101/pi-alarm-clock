@@ -120,6 +120,14 @@ func validateSonos(settings alarm.SonosSettings) error {
 		return err
 	}
 
+	if settings.GradualVolume && settings.VolumeDuration < 1 {
+		return fmt.Errorf("volume duration must be at least 1 minute")
+	}
+
+	if settings.GradualVolume && settings.VolumeDuration > 120 {
+		return fmt.Errorf("volume duration cannot exceed 120 minutes")
+	}
+
 	return nil
 }
 

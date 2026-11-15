@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/alarm"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/hue"
 	"github.com/openhue/openhue-go"
 )
@@ -118,21 +119,63 @@ func (s *HueService) TurnOff(ctx context.Context) error {
 	return client.TurnOff(ctx)
 }
 
-func (s *HueService) RunSunrise(ctx context.Context, totalDuration time.Duration) error {
-	if totalDuration <= 0 {
-		return fmt.Errorf("sunrise duration must be greater than zero")
+func (s *HueService) RunWakeUpLighting(
+	ctx context.Context,
+	settings alarm.HueSettings,
+) error {
+	if !settings.Enabled {
+		return nil
 	}
 
-	stepDelay := totalDuration / 10
-	if stepDelay <= 0 {
-		return fmt.Errorf("sunrise duration is too short")
+	if len(settings.LightIDs) == 0 {
+		return fmt.Errorf("no Hue lights selected")
 	}
 
-	if err := s.TurnOff(ctx); err != nil {
-		return fmt.Errorf("starting sunrise: %w", err)
+	if settings.StartBrightness < 0 || settings.StartBrightness > 100 {
+		return fmt.Errorf("starting brightness must be between 0 and 100")
 	}
 
-	for brightness := 10; brightness <= 100; brightness += 10 {
+	if settings.Brightness < 1 || settings.Brightness > 100 {
+		return fmt.Errorf("target brightness must be between 1 and 100")
+	}
+
+	// Turn off the selected lights before starting.
+	if err := s.SetLightsPower(ctx, settings.LightIDs, false); err != nil {
+		return fmt.Errorf("turning off Hue lights: %w", err)
+	}
+
+	// Set the initial brightness.
+	if err := s.SetLightsBrightness(
+		ctx,
+		settings.LightIDs,
+		settings.StartBrightness,
+	); err != nil {
+		return fmt.Errorf("setting starting brightness: %w", err)
+	}
+
+	// If gradual brightness is disabled, set the target immediately.
+	if !settings.GradualBrightness {
+		if err := s.SetLightsBrightness(
+			ctx,
+			settings.LightIDs,
+			settings.Brightness,
+		); err != nil {
+			return fmt.Errorf("setting target brightness: %w", err)
+		}
+
+		return nil
+	}
+
+	if settings.BrightnessDuration < 1 {
+		return fmt.Errorf("brightness duration must be at least 1 minute")
+	}
+
+	const steps = 10
+
+	duration := time.Duration(settings.BrightnessDuration) * time.Minute
+	stepDelay := duration / steps
+
+	for step := 1; step <= steps; step++ {
 		timer := time.NewTimer(stepDelay)
 
 		select {
@@ -143,10 +186,71 @@ func (s *HueService) RunSunrise(ctx context.Context, totalDuration time.Duration
 		case <-timer.C:
 		}
 
-		if err := s.SetBrightness(ctx, brightness); err != nil {
+		brightness := settings.StartBrightness +
+			(settings.Brightness-settings.StartBrightness)*step/steps
+
+		if err := s.SetLightsBrightness(
+			ctx,
+			settings.LightIDs,
+			brightness,
+		); err != nil {
 			return fmt.Errorf(
-				"setting sunrise brightness to %d%%: %w",
+				"setting Hue brightness to %d%%: %w",
 				brightness,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func (s *HueService) SetLightsPower(
+	ctx context.Context,
+	lightIDs []string,
+	on bool,
+) error {
+	s.mu.RLock()
+	client := s.client
+	available := s.available
+	s.mu.RUnlock()
+
+	if !available || client == nil {
+		return fmt.Errorf("Hue is not connected")
+	}
+
+	for _, lightID := range lightIDs {
+		if err := client.SetLightPower(ctx, lightID, on); err != nil {
+			return fmt.Errorf("setting power for Hue light %s: %w", lightID, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *HueService) SetLightsBrightness(
+	ctx context.Context,
+	lightIDs []string,
+	brightness int,
+) error {
+	if brightness < 0 || brightness > 100 {
+		return fmt.Errorf("brightness must be between 0 and 100")
+	}
+
+	s.mu.RLock()
+	client := s.client
+	available := s.available
+	s.mu.RUnlock()
+
+	if !available || client == nil {
+		return fmt.Errorf("Hue is not connected")
+	}
+
+	for _, lightID := range lightIDs {
+		if err := client.SetLightBrightness(ctx, lightID, brightness); err != nil {
+			return fmt.Errorf(
+				"setting brightness for Hue light %s: %w",
+				lightID,
 				err,
 			)
 		}

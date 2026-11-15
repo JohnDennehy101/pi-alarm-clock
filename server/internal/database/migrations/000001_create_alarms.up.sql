@@ -15,6 +15,7 @@ CREATE TABLE alarms (
 
     volume INTEGER NOT NULL DEFAULT 50,
     gradual_volume INTEGER NOT NULL DEFAULT 0,
+    volume_duration INTEGER NOT NULL DEFAULT 10,
 
     hue_enabled INTEGER NOT NULL DEFAULT 0,
     hue_light_ids TEXT NOT NULL DEFAULT '[]',

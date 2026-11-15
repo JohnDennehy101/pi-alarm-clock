@@ -9,10 +9,11 @@ import (
 )
 
 type Services struct {
-	Sonos *SonosService
-	Hue   *HueService
-	Audio *audio.AudioManager
-	Alarm *AlarmService
+	Sonos    *SonosService
+	Hue      *HueService
+	Audio    *audio.AudioManager
+	Alarm    *AlarmService
+	Executor *AlarmExecutor
 }
 
 func NewServices(
@@ -27,6 +28,11 @@ func NewServices(
 		Hue:   NewHueService(hueAPIKey),
 		Alarm: NewAlarmService(alarmRepository),
 	}
+
+	services.Executor = NewAlarmExecutor(
+		services.Sonos,
+		services.Hue,
+	)
 
 	services.initAudio(audioPort)
 	services.initSonos(ctx, sonosEnabled)

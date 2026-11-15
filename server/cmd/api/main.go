@@ -18,6 +18,7 @@ import (
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/database"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/scheduler"
 )
 
 func main() {
@@ -35,6 +36,7 @@ type application struct {
 	pin          string
 	fingerprint  string
 	db           *database.Database
+	scheduler    *scheduler.Scheduler
 }
 
 func run() error {
@@ -78,6 +80,12 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		return nil, fmt.Errorf("initialising services: %w", err)
 	}
 
+	alarmScheduler := scheduler.New(
+		services.Alarm,
+		services.Executor,
+		time.Local,
+	)
+
 	deviceStore, err := auth.OpenStore(filepath.Join(cfg.DataDir, "devices.json"))
 	if err != nil {
 		return nil, fmt.Errorf("opening device store: %w", err)
@@ -100,6 +108,7 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		pin:          pin,
 		fingerprint:  fingerprint,
 		db:           db,
+		scheduler:    alarmScheduler,
 	}, nil
 }
 
@@ -121,6 +130,19 @@ func serve(ctx context.Context, app *application) error {
 	audioServer := newServer(app.cfg.AudioPort, app.audioHandler)
 
 	serverErrors := make(chan error, 2)
+
+	schedulerCtx, cancelScheduler := context.WithCancel(ctx)
+	schedulerDone := make(chan struct{})
+
+	go func() {
+		defer close(schedulerDone)
+		app.scheduler.Run(schedulerCtx)
+	}()
+
+	defer func() {
+		cancelScheduler()
+		<-schedulerDone
+	}()
 
 	go func() {
 		log.Printf("HTTPS API listening on port %d", app.cfg.HTTPPort)
