@@ -46,7 +46,7 @@ class _StartupGateState extends State<StartupGate> {
   void _navigateTo(StartupDestination destination) {
     context.go(switch (destination) {
       StartupDestination.pairing => '/pairing',
-      StartupDestination.home => '/home',
+      StartupDestination.overview => '/',
     });
   }
 

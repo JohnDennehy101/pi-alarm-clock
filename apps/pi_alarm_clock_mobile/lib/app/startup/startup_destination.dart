@@ -1,1 +1,1 @@
-enum StartupDestination { pairing, home }
+enum StartupDestination { pairing, overview }

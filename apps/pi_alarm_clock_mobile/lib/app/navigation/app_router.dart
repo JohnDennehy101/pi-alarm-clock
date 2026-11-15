@@ -1,24 +1,23 @@
 import 'package:go_router/go_router.dart';
-import 'package:pi_alarm_clock_mobile/features/alarms/presentation/alarms_screen.dart';
-import 'package:pi_alarm_clock_mobile/features/settings/presentation/settings_screen.dart';
+import 'package:pi_alarm_clock_mobile/app/startup/startup_gate.dart';
 import 'package:provider/provider.dart';
 
-import 'app_navigator.dart';
-import '../startup/startup_gate.dart';
-import '../home/home_screen.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/alarms_screen.dart';
+import 'package:pi_alarm_clock_mobile/features/home/presentation/home_screen.dart';
+import 'package:pi_alarm_clock_mobile/features/settings/presentation/settings_screen.dart';
 
 import '../../features/pairing/application/pairing_controller.dart';
 import '../../features/pairing/pairing_service.dart';
 import '../../features/pairing/presentation/pairing_screen.dart';
 
+import 'app_navigator.dart';
 import 'main_scaffold.dart';
 
 final GoRouter appRouter = GoRouter(
   navigatorKey: AppNavigator.key,
-  initialLocation: '/',
-
+  initialLocation: '/startup',
   routes: [
-    GoRoute(path: '/', builder: (context, state) => const StartupGate()),
+    GoRoute(path: '/startup', builder: (context, state) => const StartupGate()),
     GoRoute(
       path: '/pairing',
       builder: (context, state) {
@@ -37,13 +36,9 @@ final GoRouter appRouter = GoRouter(
       branches: [
         StatefulShellBranch(
           routes: [
-            GoRoute(
-              path: '/home',
-              builder: (context, state) => const HomeScreen(),
-            ),
+            GoRoute(path: '/', builder: (context, state) => const HomeScreen()),
           ],
         ),
-
         StatefulShellBranch(
           routes: [
             GoRoute(
@@ -52,7 +47,6 @@ final GoRouter appRouter = GoRouter(
             ),
           ],
         ),
-
         StatefulShellBranch(
           routes: [
             GoRoute(

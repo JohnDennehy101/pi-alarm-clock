@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:kiwi/kiwi.dart';
+import 'package:pi_alarm_clock_mobile/features/home/application/home_controller.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/application/pairing_controller.dart';
 import 'package:provider/provider.dart';
 import 'package:pi_alarm_clock_mobile/app/app.dart';
@@ -10,9 +10,8 @@ import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
 Widget bootstrap() {
   setupDependencies();
 
-  final container = KiwiContainer();
-  final startupService = container.resolve<StartupService>();
-  final pairingService = container.resolve<PairingService>();
+  final startupService = resolve<StartupService>();
+  final pairingService = resolve<PairingService>();
 
   return MultiProvider(
     providers: [
@@ -21,6 +20,7 @@ Widget bootstrap() {
       ChangeNotifierProvider<PairingController>(
         create: (_) => PairingController(pairingService),
       ),
+      ChangeNotifierProvider(create: (_) => resolve<HomeController>()..load()),
     ],
     child: const PiAlarmClockApp(),
   );
