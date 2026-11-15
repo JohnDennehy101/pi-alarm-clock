@@ -1,18 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:pi_alarm_clock_mobile/app/navigation/app_navigator.dart';
-
-import 'startup/startup_gate.dart';
+import 'package:pi_alarm_clock_mobile/app/navigation/app_router.dart';
 
 class PiAlarmClockApp extends StatelessWidget {
   const PiAlarmClockApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
       title: 'Pi Alarm Clock',
-      navigatorKey: AppNavigator.key,
+      routerConfig: appRouter,
       debugShowCheckedModeBanner: false,
-      home: const StartupGate(),
     );
   }
 }

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
-import 'package:pi_alarm_clock_mobile/app/home/home_screen.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/application/pairing_controller.dart';
 import 'package:pi_alarm_clock_mobile/features/pairing/presentation/widgets/pin_input.dart';
 
@@ -16,8 +16,7 @@ class PairingScreen extends StatelessWidget {
 
     if (!context.mounted || !success) return;
 
-    Navigator.of(context)
-        .pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+    context.go('/home');
   }
 
   @override
