@@ -28,6 +28,12 @@ func NewRouter(services *app.Services, devices *auth.Store, pairing *PairingHand
 	mux.HandleFunc("GET /api/v1/devices/sonos", a.getSonos)
 	mux.HandleFunc("POST /api/v1/devices/sonos/discover", a.discoverSonos)
 	mux.HandleFunc("POST /api/v1/devices/sonos/connect", a.connectSonos)
+	mux.HandleFunc("GET /api/v1/devices/sonos/groups", a.getSonosGroups)
+	mux.HandleFunc("POST /api/v1/devices/sonos/groups/{groupId}/play", a.playSonosGroup)
+	mux.HandleFunc("POST /api/v1/devices/sonos/groups/{groupId}/radio", a.playSonosGroupRadio)
+	mux.HandleFunc("GET /api/v1/devices/sonos/groups/{groupId}/radio-stations", a.getSonosGroupRadioStations)
+	mux.HandleFunc("POST /api/v1/devices/sonos/groups/{groupId}/stop", a.stopSonosGroup)
+	mux.HandleFunc("PUT /api/v1/devices/sonos/groups/{groupId}/volume", a.setSonosGroupVolume)
 
 	mux.HandleFunc("GET /api/v1/devices/hue", a.getHue)
 	mux.HandleFunc("POST /api/v1/devices/hue/connect", a.connectHue)

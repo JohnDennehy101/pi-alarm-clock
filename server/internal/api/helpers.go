@@ -38,3 +38,11 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 
 	return nil
 }
+
+func validateRange(value, min, max int, field string) error {
+	if value < min || value > max {
+		return fmt.Errorf("%s must be between %d and %d", field, min, max)
+	}
+
+	return nil
+}

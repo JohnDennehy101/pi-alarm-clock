@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/sonos"
@@ -12,18 +11,18 @@ import (
 type SonosService struct {
 	mu sync.Mutex
 
-	speakers        []sonos.Speaker
-	client          *sonos.Client
-	selectedSpeaker string
-	available       bool
-	lastError       string
+	speakers          []sonos.Speaker
+	client            *sonos.Client
+	selectedSpeakerID string
+	available         bool
+	lastError         string
 }
 
 type SonosStatus struct {
-	Available       bool   `json:"available"`
-	Connected       bool   `json:"connected"`
-	SelectedSpeaker string `json:"selectedSpeaker,omitempty"`
-	Error           string `json:"error,omitempty"`
+	Available         bool   `json:"available"`
+	Connected         bool   `json:"connected"`
+	SelectedSpeakerID string `json:"selectedSpeakerId,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 func NewSonosService() *SonosService {
@@ -46,19 +45,16 @@ func (s *SonosService) Discover(
 	ctx context.Context,
 ) ([]sonos.Speaker, error) {
 	speakers, err := sonos.DiscoverSpeakers(ctx)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err != nil {
-		s.speakers = nil
-		s.client = nil
-		s.selectedSpeaker = ""
-		s.available = false
+		s.mu.Lock()
 		s.lastError = err.Error()
+		s.mu.Unlock()
 
 		return nil, fmt.Errorf("discovering speakers: %w", err)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.speakers = speakers
 	s.available = true
@@ -76,27 +72,24 @@ func (s *SonosService) Speakers() []sonos.Speaker {
 
 func (s *SonosService) Connect(
 	ctx context.Context,
-	speakerName string,
+	speakerID string,
 ) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.speakers) == 0 {
-		return fmt.Errorf("no speakers discovered; discover speakers first")
-	}
 
 	var selected *sonos.Speaker
 
 	for i := range s.speakers {
-		if speakerName == "" ||
-			strings.EqualFold(s.speakers[i].Name, speakerName) {
-			selected = &s.speakers[i]
+		if s.speakers[i].ID == speakerID {
+			speaker := s.speakers[i]
+			selected = &speaker
 			break
 		}
 	}
 
+	s.mu.Unlock()
+
 	if selected == nil {
-		return fmt.Errorf("Sonos speaker %q not found", speakerName)
+		return fmt.Errorf("Sonos speaker %q not found", speakerID)
 	}
 
 	client, err := sonos.NewClient(ctx, selected.IP)
@@ -104,8 +97,12 @@ func (s *SonosService) Connect(
 		return fmt.Errorf("connecting to %s: %w", selected.Name, err)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.client = client
-	s.selectedSpeaker = selected.Name
+	s.selectedSpeakerID = selected.ID
+	s.lastError = ""
 
 	return nil
 }
@@ -114,7 +111,7 @@ func (s *SonosService) SelectedSpeaker() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.selectedSpeaker
+	return s.selectedSpeakerID
 }
 
 func (s *SonosService) PlayURI(
@@ -168,9 +165,182 @@ func (s *SonosService) Status() SonosStatus {
 	defer s.mu.Unlock()
 
 	return SonosStatus{
-		Available:       s.available,
-		Connected:       s.client != nil,
-		SelectedSpeaker: s.selectedSpeaker,
-		Error:           s.lastError,
+		Available:         s.available,
+		Connected:         s.client != nil,
+		SelectedSpeakerID: s.selectedSpeakerID,
+		Error:             s.lastError,
 	}
+}
+
+func (s *SonosService) Groups(
+	ctx context.Context,
+) ([]sonos.Group, error) {
+	speakers := s.Speakers()
+
+	groups, err := sonos.DiscoverGroups(ctx, speakers)
+	if err != nil {
+		return nil, fmt.Errorf("discovering Sonos groups: %w", err)
+	}
+
+	return groups, nil
+}
+
+func (s *SonosService) groupClient(
+	ctx context.Context,
+	groupID string,
+) (*sonos.Client, sonos.Group, error) {
+	speakers, group, err := s.groupDetails(ctx, groupID)
+	if err != nil {
+		return nil, sonos.Group{}, err
+	}
+
+	client, err := sonos.NewGroupClient(ctx, group, speakers)
+	if err != nil {
+		return nil, sonos.Group{}, fmt.Errorf(
+			"creating client for group %q: %w",
+			groupID,
+			err,
+		)
+	}
+
+	return client, group, nil
+}
+
+func (s *SonosService) groupDetails(
+	ctx context.Context,
+	groupID string,
+) ([]sonos.Speaker, sonos.Group, error) {
+	speakers := s.Speakers()
+
+	if len(speakers) == 0 {
+		return nil, sonos.Group{}, fmt.Errorf(
+			"no speakers discovered; discover speakers first",
+		)
+	}
+
+	groups, err := sonos.DiscoverGroups(ctx, speakers)
+	if err != nil {
+		return nil, sonos.Group{}, fmt.Errorf(
+			"discovering Sonos groups: %w",
+			err,
+		)
+	}
+
+	for _, group := range groups {
+		if group.ID == groupID {
+			return speakers, group, nil
+		}
+	}
+
+	return nil, sonos.Group{}, fmt.Errorf(
+		"Sonos group %q not found",
+		groupID,
+	)
+}
+
+func (s *SonosService) PlayGroupURI(
+	ctx context.Context,
+	groupID string,
+	uri string,
+	metadata string,
+) error {
+	return s.withGroupClient(ctx, groupID, func(c *sonos.Client) error {
+		return c.PlayURI(ctx, uri, metadata)
+	})
+}
+
+func (s *SonosService) PlayGroupRadioStation(
+	ctx context.Context,
+	groupID string,
+	name string,
+) error {
+	return s.withGroupClient(ctx, groupID, func(c *sonos.Client) error {
+		return c.PlayRadioStation(ctx, name)
+	})
+}
+
+func (s *SonosService) GetGroupRadioStations(
+	ctx context.Context,
+	groupID string,
+) ([]sonos.RadioStation, error) {
+	var stations []sonos.RadioStation
+
+	err := s.withGroupClient(ctx, groupID, func(c *sonos.Client) error {
+		var err error
+		stations, err = c.GetRadioStations(ctx)
+		return err
+	})
+
+	return stations, err
+}
+
+func (s *SonosService) StopGroup(
+	ctx context.Context,
+	groupID string,
+) error {
+	return s.withGroupClient(ctx, groupID, func(c *sonos.Client) error {
+		return c.Stop(ctx)
+	})
+}
+
+func (s *SonosService) SetGroupVolume(
+	ctx context.Context,
+	groupID string,
+	volume int,
+) error {
+	if volume < 0 || volume > 100 {
+		return fmt.Errorf("volume must be between 0 and 100")
+	}
+
+	speakers, group, err := s.groupDetails(ctx, groupID)
+	if err != nil {
+		return err
+	}
+
+	if len(group.Members) == 0 {
+		return fmt.Errorf("Sonos group %q has no members", groupID)
+	}
+
+	for _, member := range group.Members {
+		speaker, err := sonos.FindSpeaker(speakers, member.SpeakerID)
+		if err != nil {
+			return fmt.Errorf(
+				"finding group member %q: %w",
+				member.Name,
+				err,
+			)
+		}
+
+		client, err := sonos.NewClient(ctx, speaker.IP)
+		if err != nil {
+			return fmt.Errorf(
+				"connecting to group member %q: %w",
+				member.Name,
+				err,
+			)
+		}
+
+		if err := client.SetVolume(ctx, volume); err != nil {
+			return fmt.Errorf(
+				"setting volume for group member %q: %w",
+				member.Name,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func (s *SonosService) withGroupClient(
+	ctx context.Context,
+	groupID string,
+	fn func(*sonos.Client) error,
+) error {
+	client, _, err := s.groupClient(ctx, groupID)
+	if err != nil {
+		return err
+	}
+
+	return fn(client)
 }
