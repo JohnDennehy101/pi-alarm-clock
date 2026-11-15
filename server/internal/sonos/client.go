@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,8 +35,13 @@ var sonosHTTPClient = &http.Client{
 }
 
 type Speaker struct {
-	Name string
-	IP   string
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	IP               string `json:"ip"`
+	Manufacturer     string `json:"manufacturer,omitempty"`
+	ModelName        string `json:"modelName,omitempty"`
+	ModelNumber      string `json:"modelNumber,omitempty"`
+	ModelDescription string `json:"modelDescription,omitempty"`
 }
 
 type Client struct {
@@ -58,53 +64,85 @@ func DiscoverSpeakers(ctx context.Context) ([]Speaker, error) {
 		return nil, fmt.Errorf("discovering Sonos speakers: %w", err)
 	}
 
-	var speakers []Speaker
+	speakersByID := make(map[string]Speaker)
+
 	for _, device := range devices {
-		if speaker, ok := parseDevice(ctx, device); ok {
-			speakers = append(speakers, speaker)
+		speaker, ok := parseDevice(ctx, device)
+		if !ok {
+			continue
 		}
+
+		speakersByID[speaker.ID] = speaker
+	}
+
+	speakers := make([]Speaker, 0, len(speakersByID))
+	for _, speaker := range speakersByID {
+		speakers = append(speakers, speaker)
 	}
 
 	if len(speakers) == 0 {
 		return nil, fmt.Errorf("no Sonos speakers found")
 	}
 
+	sort.Slice(speakers, func(i, j int) bool {
+		nameI := strings.ToLower(speakers[i].Name)
+		nameJ := strings.ToLower(speakers[j].Name)
+
+		if nameI == nameJ {
+			return speakers[i].ID < speakers[j].ID
+		}
+
+		return nameI < nameJ
+	})
+
 	return speakers, nil
 }
 
-func parseDevice(ctx context.Context, device goupnp.MaybeRootDevice) (Speaker, bool) {
-
+func parseDevice(
+	ctx context.Context,
+	device goupnp.MaybeRootDevice,
+) (Speaker, bool) {
 	if device.Err != nil {
 		return Speaker{}, false
 	}
+	if device.Root == nil ||
+		device.Location == nil {
+		return Speaker{}, false
+	}
 
-	if device.Root == nil || device.Location == nil {
+	upnpDevice := device.Root.Device
+
+	if upnpDevice.UDN == "" {
 		return Speaker{}, false
 	}
 
 	host := device.Location.Hostname()
-
 	ip := net.ParseIP(host)
 
 	if ip == nil {
-		resolved, err := net.LookupIP(host)
+		resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 		if err != nil || len(resolved) == 0 {
 			return Speaker{}, false
 		}
 
-		ip = resolved[0]
+		ip = resolved[0].IP
 	}
 
 	ipStr := ip.String()
 
 	roomName, err := getSonosRoomName(ctx, ipStr)
-	if err != nil {
-		roomName = device.Root.Device.FriendlyName
+	if err != nil || roomName == "" {
+		roomName = upnpDevice.FriendlyName
 	}
 
 	return Speaker{
-		Name: roomName,
-		IP:   ipStr,
+		ID:               upnpDevice.UDN,
+		Name:             roomName,
+		IP:               ipStr,
+		Manufacturer:     upnpDevice.Manufacturer,
+		ModelName:        upnpDevice.ModelName,
+		ModelNumber:      upnpDevice.ModelNumber,
+		ModelDescription: upnpDevice.ModelDescription,
 	}, true
 }
 
@@ -176,7 +214,7 @@ func parseDeviceURL(speakerIP string) (*url.URL, error) {
 
 func NewDiscoveredClient(
 	ctx context.Context,
-	speakerName string,
+	speakerID string,
 ) (*Client, error) {
 	speakers, err := DiscoverSpeakers(ctx)
 	if err != nil {
@@ -184,13 +222,12 @@ func NewDiscoveredClient(
 	}
 
 	for _, speaker := range speakers {
-		if speakerName == "" ||
-			strings.EqualFold(speaker.Name, speakerName) {
+		if speaker.ID == speakerID {
 			return NewClient(ctx, speaker.IP)
 		}
 	}
 
-	return nil, fmt.Errorf("Sonos speaker %q not found", speakerName)
+	return nil, fmt.Errorf("Sonos speaker %q not found", speakerID)
 }
 
 func (c *Client) PlayURI(
@@ -274,7 +311,7 @@ func getSonosRoomName(ctx context.Context, ip string) (string, error) {
 	}
 
 	req.Header.Set("Content-Type", "text/xml; charset=\"utf-8\"")
-	req.Header.Set("SOAPAction", "\"urn:schemas-upnp-org:service:DeviceProperty:1#GetZoneAttributes\"")
+	req.Header.Set("SOAPAction", devicePropertiesSOAPAction)
 
 	resp, err := sonosHTTPClient.Do(req)
 	if err != nil {

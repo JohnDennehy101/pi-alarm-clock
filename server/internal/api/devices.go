@@ -41,7 +41,7 @@ func (a *API) discoverSonos(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) connectSonos(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		SpeakerName string `json:"speakerName"`
+		SpeakerID string `json:"speakerId"`
 	}
 
 	if err := decodeJSON(w, r, &request); err != nil {
@@ -49,12 +49,12 @@ func (a *API) connectSonos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.SpeakerName == "" {
-		writeError(w, http.StatusBadRequest, "speakerName is required")
+	if request.SpeakerID == "" {
+		writeError(w, http.StatusBadRequest, "speakerId is required")
 		return
 	}
 
-	if err := a.services.Sonos.Connect(r.Context(), request.SpeakerName); err != nil {
+	if err := a.services.Sonos.Connect(r.Context(), request.SpeakerID); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}

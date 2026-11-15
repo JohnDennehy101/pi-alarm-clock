@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/sonos"
@@ -12,18 +11,18 @@ import (
 type SonosService struct {
 	mu sync.Mutex
 
-	speakers        []sonos.Speaker
-	client          *sonos.Client
-	selectedSpeaker string
-	available       bool
-	lastError       string
+	speakers          []sonos.Speaker
+	client            *sonos.Client
+	selectedSpeakerID string
+	available         bool
+	lastError         string
 }
 
 type SonosStatus struct {
-	Available       bool   `json:"available"`
-	Connected       bool   `json:"connected"`
-	SelectedSpeaker string `json:"selectedSpeaker,omitempty"`
-	Error           string `json:"error,omitempty"`
+	Available         bool   `json:"available"`
+	Connected         bool   `json:"connected"`
+	SelectedSpeakerID string `json:"selectedSpeakerId,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 func NewSonosService() *SonosService {
@@ -46,19 +45,16 @@ func (s *SonosService) Discover(
 	ctx context.Context,
 ) ([]sonos.Speaker, error) {
 	speakers, err := sonos.DiscoverSpeakers(ctx)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if err != nil {
-		s.speakers = nil
-		s.client = nil
-		s.selectedSpeaker = ""
-		s.available = false
+		s.mu.Lock()
 		s.lastError = err.Error()
+		s.mu.Unlock()
 
 		return nil, fmt.Errorf("discovering speakers: %w", err)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	s.speakers = speakers
 	s.available = true
@@ -76,27 +72,24 @@ func (s *SonosService) Speakers() []sonos.Speaker {
 
 func (s *SonosService) Connect(
 	ctx context.Context,
-	speakerName string,
+	speakerID string,
 ) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if len(s.speakers) == 0 {
-		return fmt.Errorf("no speakers discovered; discover speakers first")
-	}
 
 	var selected *sonos.Speaker
 
 	for i := range s.speakers {
-		if speakerName == "" ||
-			strings.EqualFold(s.speakers[i].Name, speakerName) {
-			selected = &s.speakers[i]
+		if s.speakers[i].ID == speakerID {
+			speaker := s.speakers[i]
+			selected = &speaker
 			break
 		}
 	}
 
+	s.mu.Unlock()
+
 	if selected == nil {
-		return fmt.Errorf("Sonos speaker %q not found", speakerName)
+		return fmt.Errorf("Sonos speaker %q not found", speakerID)
 	}
 
 	client, err := sonos.NewClient(ctx, selected.IP)
@@ -104,8 +97,12 @@ func (s *SonosService) Connect(
 		return fmt.Errorf("connecting to %s: %w", selected.Name, err)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.client = client
-	s.selectedSpeaker = selected.Name
+	s.selectedSpeakerID = selected.ID
+	s.lastError = ""
 
 	return nil
 }
@@ -114,7 +111,7 @@ func (s *SonosService) SelectedSpeaker() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.selectedSpeaker
+	return s.selectedSpeakerID
 }
 
 func (s *SonosService) PlayURI(
@@ -168,9 +165,9 @@ func (s *SonosService) Status() SonosStatus {
 	defer s.mu.Unlock()
 
 	return SonosStatus{
-		Available:       s.available,
-		Connected:       s.client != nil,
-		SelectedSpeaker: s.selectedSpeaker,
-		Error:           s.lastError,
+		Available:         s.available,
+		Connected:         s.client != nil,
+		SelectedSpeakerID: s.selectedSpeakerID,
+		Error:             s.lastError,
 	}
 }
