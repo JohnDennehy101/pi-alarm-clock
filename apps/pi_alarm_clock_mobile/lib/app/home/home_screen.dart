@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
-import '../../app/startup/startup_gate.dart';
-import '../../app/startup/startup_service.dart';
+import '../startup/startup_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -51,8 +51,7 @@ class HomeScreen extends StatelessWidget {
   }
 
   void _returnToStartup(BuildContext context) {
-    Navigator.of(context)
-        .pushReplacement(MaterialPageRoute(builder: (_) => StartupGate()));
+    context.go('/');
   }
 
   void _showMessage(BuildContext context, String message) {

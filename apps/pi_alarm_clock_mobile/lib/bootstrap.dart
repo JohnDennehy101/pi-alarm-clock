@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:kiwi/kiwi.dart';
+import 'package:pi_alarm_clock_mobile/features/pairing/application/pairing_controller.dart';
 import 'package:provider/provider.dart';
 import 'package:pi_alarm_clock_mobile/app/app.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
@@ -17,6 +18,9 @@ Widget bootstrap() {
     providers: [
       Provider<StartupService>.value(value: startupService),
       Provider<PairingService>.value(value: pairingService),
+      ChangeNotifierProvider<PairingController>(
+        create: (_) => PairingController(pairingService),
+      ),
     ],
     child: const PiAlarmClockApp(),
   );

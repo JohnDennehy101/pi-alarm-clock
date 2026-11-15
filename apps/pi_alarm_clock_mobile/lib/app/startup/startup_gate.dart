@@ -1,14 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:pi_alarm_clock_mobile/features/pairing/application/pairing_controller.dart';
-import 'package:pi_alarm_clock_mobile/features/pairing/pairing_service.dart';
 import 'package:provider/provider.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:pi_alarm_clock_mobile/app/startup/startup_destination.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
 import 'package:pi_alarm_clock_mobile/services/api/server_not_verified_exception.dart';
-
-import '../home/home_screen.dart';
-import '../../features/pairing/presentation/pairing_screen.dart';
 
 class StartupGate extends StatefulWidget {
   const StartupGate({super.key});
@@ -48,15 +44,10 @@ class _StartupGateState extends State<StartupGate> {
   }
 
   void _navigateTo(StartupDestination destination) {
-    switch (destination) {
-      case StartupDestination.pairing:
-        Navigator.of(context).pushReplacement(_buildPairingRoute());
-
-      case StartupDestination.home:
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const HomeScreen()),
-        );
-    }
+    context.go(switch (destination) {
+      StartupDestination.pairing => '/pairing',
+      StartupDestination.home => '/home',
+    });
   }
 
   void _showError(String message) {
@@ -78,16 +69,7 @@ class _StartupGateState extends State<StartupGate> {
   }
 
   void _enterPairingMode() {
-    Navigator.of(context).pushReplacement(_buildPairingRoute());
-  }
-
-  MaterialPageRoute _buildPairingRoute() {
-    return MaterialPageRoute(
-      builder: (_) => ChangeNotifierProvider(
-        create: (context) => PairingController(context.read<PairingService>()),
-        child: const PairingScreen(),
-      ),
-    );
+    context.go('/pairing');
   }
 
   @override
