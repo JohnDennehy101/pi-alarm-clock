@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_gate.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/alarms_form_screen.dart';
 import 'package:provider/provider.dart';
 
 import 'package:pi_alarm_clock_mobile/features/alarms/presentation/alarms_screen.dart';
@@ -44,9 +45,21 @@ final GoRouter appRouter = GoRouter(
             GoRoute(
               path: '/alarms',
               builder: (context, state) => const AlarmsScreen(),
+              routes: [
+                GoRoute(
+                  path: 'new',
+                  builder: (context, state) => const AlarmFormScreen(),
+                ),
+                GoRoute(
+                  path: ':id/edit',
+                  builder: (context, state) =>
+                      AlarmFormScreen(alarmId: state.pathParameters['id']!),
+                ),
+              ],
             ),
           ],
         ),
+
         StatefulShellBranch(
           routes: [
             GoRoute(

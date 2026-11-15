@@ -9,6 +9,13 @@ class PiAlarmClockApp extends StatelessWidget {
     return MaterialApp.router(
       title: 'Pi Alarm Clock',
       routerConfig: appRouter,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF456B85),
+          brightness: Brightness.light,
+        ),
+      ),
       debugShowCheckedModeBanner: false,
     );
   }

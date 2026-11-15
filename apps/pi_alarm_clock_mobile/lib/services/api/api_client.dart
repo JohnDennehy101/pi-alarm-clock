@@ -501,6 +501,42 @@ class ApiClient {
     }
   }
 
+  Future<http.Response> put(String endpoint, Map<String, dynamic> body) async {
+    final baseUrl = _serverBaseUrl;
+
+    if (baseUrl == null) {
+      throw StateError('serverBaseUrl not set. Call setServerBaseUrl() first.');
+    }
+
+    final uri = _buildRequestUri(baseUrl, endpoint);
+    final identity = _ServerIdentity.fromUri(uri);
+    final generation = _pairingGeneration;
+
+    final handshake = _Handshake(identity);
+    final client = IOClient(_createPinnedClient(handshake));
+
+    try {
+      return await _send(
+        () async {
+          final token = await storage.read(key: _tokenKey);
+
+          return client.put(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              if (token != null) 'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode(body),
+          );
+        },
+        handshake,
+        generation,
+      );
+    } finally {
+      client.close();
+    }
+  }
+
   Future<http.Response> delete(String endpoint) async {
     final baseUrl = _serverBaseUrl;
 

@@ -5,6 +5,10 @@ import 'package:pi_alarm_clock_mobile/app/startup/infra/startup_device_discovery
 import 'package:pi_alarm_clock_mobile/app/startup/interfaces/startup_api.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/interfaces/startup_device_discovery.dart';
 import 'package:pi_alarm_clock_mobile/app/startup/startup_service.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/application/alarm_controller.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/infra/alarm_api_service.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/infra/alarm_repository.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/domain/interfaces/alarm_api.dart';
 import 'package:pi_alarm_clock_mobile/features/home/application/home_controller.dart';
 import 'package:pi_alarm_clock_mobile/features/home/domain/interfaces/home_api.dart';
 import 'package:pi_alarm_clock_mobile/features/home/infra/home_api_service.dart';
@@ -65,6 +69,18 @@ void setupDependencies() {
 
   _container.registerFactory<HomeController>(
     (c) => HomeController(c.resolve<HomeApi>()),
+  );
+
+  _container.registerFactory<AlarmApi>(
+    (c) => AlarmApiService(c.resolve<ApiClient>()),
+  );
+
+  _container.registerFactory<AlarmRepository>(
+    (c) => AlarmRepository(api: c.resolve<AlarmApi>()),
+  );
+
+  _container.registerFactory<AlarmController>(
+    (c) => AlarmController(c.resolve<AlarmRepository>()),
   );
 }
 

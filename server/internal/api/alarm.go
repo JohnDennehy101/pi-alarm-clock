@@ -33,7 +33,9 @@ func (a *API) createAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, alarmRequest)
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"alarm": alarmRequest,
+	})
 }
 
 func (a *API) getAlarm(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +52,9 @@ func (a *API) getAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, alarmResponse)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"alarm": alarmResponse,
+	})
 }
 
 func (a *API) updateAlarm(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +77,9 @@ func (a *API) updateAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, alarmRequest)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"alarm": alarmRequest,
+	})
 }
 
 func (a *API) deleteAlarm(w http.ResponseWriter, r *http.Request) {
