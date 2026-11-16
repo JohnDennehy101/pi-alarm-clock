@@ -1,9 +1,10 @@
 package alarm
 
 type SonosSettings struct {
-	Target         SonosTarget `json:"target"`
-	Source         AudioSource `json:"source"`
-	Volume         int         `json:"volume"`
-	GradualVolume  bool        `json:"gradualVolume"`
-	VolumeDuration int         `json:"volumeDuration"`
+	Target             SonosTarget `json:"target"`
+	Source             AudioSource `json:"source"`
+	Volume             int         `json:"volume"`
+	GradualVolume      bool        `json:"gradualVolume"`
+	VolumeDuration     int         `json:"volumeDuration"`
+	StartOffsetMinutes int         `json:"startOffsetMinutes"`
 }

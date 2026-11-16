@@ -24,7 +24,32 @@ func NewAlarmExecutor(
 	}
 }
 
-func (e *AlarmExecutor) Execute(
+func (e *AlarmExecutor) StartLighting(
+	ctx context.Context,
+	a alarm.Alarm,
+) error {
+	if !a.Hue.Enabled {
+		return nil
+	}
+
+	if e.hue == nil {
+		return fmt.Errorf("Hue is enabled but Hue service is not configured")
+	}
+
+	go func() {
+		if err := e.hue.RunWakeUpLighting(ctx, a.Hue); err != nil {
+			log.Printf(
+				"alarm %s: Hue wake-up lighting failed: %v",
+				a.ID,
+				err,
+			)
+		}
+	}()
+
+	return nil
+}
+
+func (e *AlarmExecutor) StartAudio(
 	ctx context.Context,
 	a alarm.Alarm,
 ) error {
@@ -48,22 +73,6 @@ func (e *AlarmExecutor) Execute(
 		); err != nil {
 			return fmt.Errorf("setting Sonos volume: %w", err)
 		}
-	}
-
-	if a.Hue.Enabled {
-		if e.hue == nil {
-			return fmt.Errorf("Hue is enabled but Hue service is not configured")
-		}
-
-		go func() {
-			if err := e.hue.RunWakeUpLighting(ctx, a.Hue); err != nil {
-				log.Printf(
-					"alarm %s: Hue wake-up lighting failed: %v",
-					a.ID,
-					err,
-				)
-			}
-		}()
 	}
 
 	if err := e.playAlarmSource(ctx, a); err != nil {
