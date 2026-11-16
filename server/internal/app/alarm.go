@@ -112,6 +112,14 @@ func validateSonos(settings alarm.SonosSettings) error {
 		return fmt.Errorf("alarm volume must be between 0 and 100")
 	}
 
+	if settings.StartVolume < 0 || settings.StartVolume > 100 {
+		return fmt.Errorf("alarm start volume must be between 0 and 100")
+	}
+
+	if settings.GradualVolume && settings.StartVolume > settings.Volume {
+		return fmt.Errorf("alarm start volume must not exceed the target volume")
+	}
+
 	if settings.StartOffsetMinutes < 0 || settings.StartOffsetMinutes > alarm.MaxStartOffsetMinutes {
 		return fmt.Errorf(
 			"Sonos start offset must be between 0 and %d minutes",

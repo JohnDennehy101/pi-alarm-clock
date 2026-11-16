@@ -61,7 +61,7 @@ func (e *AlarmExecutor) StartAudio(
 		if err := e.sonos.SetTargetVolume(
 			ctx,
 			a.Sonos.Target,
-			0,
+			a.Sonos.StartVolume,
 		); err != nil {
 			return fmt.Errorf("setting initial Sonos volume: %w", err)
 		}
@@ -86,6 +86,7 @@ func (e *AlarmExecutor) StartAudio(
 			if err := e.sonos.RunGradualVolume(
 				ctx,
 				a.Sonos.Target,
+				a.Sonos.StartVolume,
 				a.Sonos.Volume,
 				duration,
 			); err != nil {

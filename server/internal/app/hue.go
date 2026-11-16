@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +121,16 @@ func (s *HueService) TurnOff(ctx context.Context) error {
 	return client.TurnOff(ctx)
 }
 
+const (
+	// dawnStartColourTemperature is where the wake-up lighting begins: a
+	// gentle warm white
+	dawnStartColourTemperature = 2700
+
+	// dawnDefaultTargetColourTemperature is the end of the colour ramp when
+	// an alarm does not specify one: neutral daylight.
+	dawnDefaultTargetColourTemperature = 4000
+)
+
 func (s *HueService) RunWakeUpLighting(
 	ctx context.Context,
 	settings alarm.HueSettings,
@@ -139,12 +151,28 @@ func (s *HueService) RunWakeUpLighting(
 		return fmt.Errorf("target brightness must be between 1 and 100")
 	}
 
-	// Turn off the selected lights before starting.
+	targetColourTemperature := settings.ColourTemperature
+	if targetColourTemperature == 0 {
+		targetColourTemperature = dawnDefaultTargetColourTemperature
+	}
+
 	if err := s.SetLightsPower(ctx, settings.LightIDs, false); err != nil {
 		return fmt.Errorf("turning off Hue lights: %w", err)
 	}
 
-	// Set the initial brightness.
+	colourLights, unsupported := s.applyColourTemperature(
+		ctx,
+		settings.LightIDs,
+		dawnStartColourTemperature,
+	)
+
+	if len(unsupported) > 0 {
+		log.Printf(
+			"Hue wake-up lighting: lights %s do not support colour temperature; controlling their brightness only",
+			strings.Join(unsupported, ", "),
+		)
+	}
+
 	if err := s.SetLightsBrightness(
 		ctx,
 		settings.LightIDs,
@@ -153,8 +181,18 @@ func (s *HueService) RunWakeUpLighting(
 		return fmt.Errorf("setting starting brightness: %w", err)
 	}
 
-	// If gradual brightness is disabled, set the target immediately.
 	if !settings.GradualBrightness {
+		if _, failed := s.applyColourTemperature(
+			ctx,
+			colourLights,
+			targetColourTemperature,
+		); len(failed) > 0 {
+			log.Printf(
+				"Hue wake-up lighting: failed to set target colour for lights %s",
+				strings.Join(failed, ", "),
+			)
+		}
+
 		if err := s.SetLightsBrightness(
 			ctx,
 			settings.LightIDs,
@@ -200,9 +238,65 @@ func (s *HueService) RunWakeUpLighting(
 				err,
 			)
 		}
+
+		colourTemperature := dawnStartColourTemperature +
+			(targetColourTemperature-dawnStartColourTemperature)*step/steps
+
+		if _, failed := s.applyColourTemperature(
+			ctx,
+			colourLights,
+			colourTemperature,
+		); len(failed) > 0 {
+			log.Printf(
+				"Hue wake-up lighting: failed to set colour temperature to %dK for lights %s",
+				colourTemperature,
+				strings.Join(failed, ", "),
+			)
+		}
 	}
 
 	return nil
+}
+
+func (s *HueService) applyColourTemperature(
+	ctx context.Context,
+	lightIDs []string,
+	temperature int,
+) (succeeded, failed []string) {
+	succeeded = make([]string, 0, len(lightIDs))
+	failed = make([]string, 0)
+
+	var mu sync.Mutex
+
+	var wg sync.WaitGroup
+
+	for _, lightID := range lightIDs {
+		wg.Add(1)
+
+		go func(id string) {
+			defer wg.Done()
+
+			if err := s.SetLightsColourTemperature(
+				ctx,
+				[]string{id},
+				temperature,
+			); err != nil {
+				mu.Lock()
+				failed = append(failed, id)
+				mu.Unlock()
+
+				return
+			}
+
+			mu.Lock()
+			succeeded = append(succeeded, id)
+			mu.Unlock()
+		}(lightID)
+	}
+
+	wg.Wait()
+
+	return succeeded, failed
 }
 
 func (s *HueService) SetLightsPower(
@@ -250,6 +344,33 @@ func (s *HueService) SetLightsBrightness(
 		if err := client.SetLightBrightness(ctx, lightID, brightness); err != nil {
 			return fmt.Errorf(
 				"setting brightness for Hue light %s: %w",
+				lightID,
+				err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func (s *HueService) SetLightsColourTemperature(
+	ctx context.Context,
+	lightIDs []string,
+	temperature int,
+) error {
+	s.mu.RLock()
+	client := s.client
+	available := s.available
+	s.mu.RUnlock()
+
+	if !available || client == nil {
+		return fmt.Errorf("Hue is not connected")
+	}
+
+	for _, lightID := range lightIDs {
+		if err := client.SetLightColourTemperature(ctx, lightID, temperature); err != nil {
+			return fmt.Errorf(
+				"setting colour temperature for Hue light %s: %w",
 				lightID,
 				err,
 			)

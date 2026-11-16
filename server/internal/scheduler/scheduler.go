@@ -228,8 +228,6 @@ func (s *Scheduler) check(
 			)
 		}
 
-		audioFired[a.ID] = occurrenceKey
-
 		if err := s.executor.StartAudio(ctx, a); err != nil {
 			log.Printf(
 				"scheduler: failed to start audio for alarm %q: %v",
