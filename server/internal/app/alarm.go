@@ -112,6 +112,21 @@ func validateSonos(settings alarm.SonosSettings) error {
 		return fmt.Errorf("alarm volume must be between 0 and 100")
 	}
 
+	if settings.StartVolume < 0 || settings.StartVolume > 100 {
+		return fmt.Errorf("alarm start volume must be between 0 and 100")
+	}
+
+	if settings.GradualVolume && settings.StartVolume > settings.Volume {
+		return fmt.Errorf("alarm start volume must not exceed the target volume")
+	}
+
+	if settings.StartOffsetMinutes < 0 || settings.StartOffsetMinutes > alarm.MaxStartOffsetMinutes {
+		return fmt.Errorf(
+			"Sonos start offset must be between 0 and %d minutes",
+			alarm.MaxStartOffsetMinutes,
+		)
+	}
+
 	if err := validateTarget(settings.Target); err != nil {
 		return err
 	}
@@ -214,6 +229,13 @@ func validateHue(settings alarm.HueSettings) error {
 
 	if settings.StartBrightness < 0 || settings.StartBrightness > 100 {
 		return fmt.Errorf("Hue start brightness must be between 0 and 100")
+	}
+
+	if settings.StartOffsetMinutes < 0 || settings.StartOffsetMinutes > alarm.MaxStartOffsetMinutes {
+		return fmt.Errorf(
+			"Hue start offset must be between 0 and %d minutes",
+			alarm.MaxStartOffsetMinutes,
+		)
 	}
 
 	if settings.Brightness < 1 || settings.Brightness > 100 {

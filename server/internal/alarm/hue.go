@@ -5,6 +5,8 @@ type HueSettings struct {
 
 	LightIDs []string `json:"lightIds,omitempty"`
 
+	StartOffsetMinutes int `json:"startOffsetMinutes"`
+
 	StartBrightness int `json:"startBrightness"`
 	Brightness      int `json:"brightness"`
 

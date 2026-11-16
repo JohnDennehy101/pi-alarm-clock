@@ -2,13 +2,19 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/alarm"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/sonos"
 )
+
+const sonosDiscoveryAttempts = 2
 
 type SonosService struct {
 	mu sync.Mutex
@@ -18,6 +24,13 @@ type SonosService struct {
 	selectedSpeakerID string
 	available         bool
 	lastError         string
+	persistPath       string
+}
+
+type persistedSpeakerSelection struct {
+	SpeakerID string `json:"speakerId"`
+	Name      string `json:"name,omitempty"`
+	IP        string `json:"ip"`
 }
 
 type SonosStatus struct {
@@ -27,8 +40,10 @@ type SonosStatus struct {
 	Error             string `json:"error,omitempty"`
 }
 
-func NewSonosService() *SonosService {
-	return &SonosService{}
+func NewSonosService(persistPath string) *SonosService {
+	return &SonosService{
+		persistPath: persistPath,
+	}
 }
 
 func (s *SonosService) withClient(fn func(c *sonos.Client) error) error {
@@ -106,7 +121,112 @@ func (s *SonosService) Connect(
 	s.selectedSpeakerID = selected.ID
 	s.lastError = ""
 
+	s.persistSelection(*selected)
+
 	return nil
+}
+
+// DiscoverWithRetries retries discovery a few times before giving up.
+func (s *SonosService) DiscoverWithRetries(
+	ctx context.Context,
+	attempts int,
+) error {
+	var err error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if _, err = s.Discover(ctx); err == nil {
+			return nil
+		}
+
+		if attempt < attempts {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+
+			case <-time.After(3 * time.Second):
+			}
+		}
+	}
+
+	return err
+}
+
+func (s *SonosService) Restore(ctx context.Context) error {
+	persisted := s.readPersistedSelection()
+
+	if persisted == nil {
+		return s.DiscoverWithRetries(ctx, sonosDiscoveryAttempts)
+	}
+
+	client, err := sonos.NewClient(ctx, persisted.IP)
+	if err == nil {
+		s.mu.Lock()
+		s.client = client
+		s.selectedSpeakerID = persisted.SpeakerID
+		s.available = true
+		s.lastError = ""
+		s.mu.Unlock()
+
+		if listErr := s.DiscoverWithRetries(ctx, 1); listErr != nil {
+			log.Printf("Sonos: refreshing speaker list failed: %v", listErr)
+		}
+
+		return nil
+	}
+
+	if err := s.DiscoverWithRetries(ctx, sonosDiscoveryAttempts); err != nil {
+		return err
+	}
+
+	return s.Connect(ctx, persisted.SpeakerID)
+}
+
+func (s *SonosService) readPersistedSelection() *persistedSpeakerSelection {
+	if s.persistPath == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(s.persistPath)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("Sonos: reading persisted selection: %v", err)
+		}
+
+		return nil
+	}
+
+	var persisted persistedSpeakerSelection
+
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		log.Printf("Sonos: parsing persisted selection: %v", err)
+		return nil
+	}
+
+	if persisted.SpeakerID == "" || persisted.IP == "" {
+		return nil
+	}
+
+	return &persisted
+}
+
+func (s *SonosService) persistSelection(speaker sonos.Speaker) {
+	if s.persistPath == "" {
+		return
+	}
+
+	data, err := json.Marshal(persistedSpeakerSelection{
+		SpeakerID: speaker.ID,
+		Name:      speaker.Name,
+		IP:        speaker.IP,
+	})
+	if err != nil {
+		log.Printf("Sonos: encoding persisted selection: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(s.persistPath, data, 0o600); err != nil {
+		log.Printf("Sonos: saving persisted selection: %v", err)
+	}
 }
 
 func (s *SonosService) SelectedSpeaker() string {
@@ -385,9 +505,14 @@ func (s *SonosService) SetTargetVolume(
 func (s *SonosService) RunGradualVolume(
 	ctx context.Context,
 	target alarm.SonosTarget,
+	startVolume int,
 	targetVolume int,
 	duration time.Duration,
 ) error {
+	if startVolume < 0 || startVolume > 100 {
+		return fmt.Errorf("start volume must be between 0 and 100")
+	}
+
 	if targetVolume < 0 || targetVolume > 100 {
 		return fmt.Errorf("volume must be between 0 and 100")
 	}
@@ -414,7 +539,7 @@ func (s *SonosService) RunGradualVolume(
 		case <-timer.C:
 		}
 
-		volume := targetVolume * step / steps
+		volume := startVolume + (targetVolume-startVolume)*step/steps
 
 		if err := s.SetTargetVolume(ctx, target, volume); err != nil {
 			return fmt.Errorf(

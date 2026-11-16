@@ -97,14 +97,15 @@ func NextOccurrence(
 	return time.Time{}, false
 }
 
-const checkInterval = 5 * time.Second
+const checkInterval = 15 * time.Second
 
 type AlarmProvider interface {
 	List(ctx context.Context) ([]alarm.Alarm, error)
 }
 
 type AlarmExecutor interface {
-	Execute(ctx context.Context, a alarm.Alarm) error
+	StartAudio(ctx context.Context, a alarm.Alarm) error
+	StartLighting(ctx context.Context, a alarm.Alarm) error
 }
 
 type Scheduler struct {
@@ -138,23 +139,25 @@ func (s *Scheduler) Run(ctx context.Context) {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
-	lastFired := make(map[string]string)
+	audioFired := make(map[string]string)
+	lightingFired := make(map[string]string)
 
-	s.check(ctx, lastFired)
+	s.check(ctx, audioFired, lightingFired)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.check(ctx, lastFired)
+			s.check(ctx, audioFired, lightingFired)
 		}
 	}
 }
 
 func (s *Scheduler) check(
 	ctx context.Context,
-	lastFired map[string]string,
+	audioFired map[string]string,
+	lightingFired map[string]string,
 ) {
 	alarms, err := s.alarms.List(ctx)
 	if err != nil {
@@ -164,23 +167,70 @@ func (s *Scheduler) check(
 
 	now := time.Now().In(s.location)
 	currentMinute := now.Truncate(time.Minute)
-	currentDate := currentMinute.Format("2006-01-02")
+
+	base := currentMinute.Add(-alarm.MaxStartOffsetMinutes * time.Minute)
 
 	for _, a := range alarms {
-		occurrence, ok := NextOccurrence(a, currentMinute, s.location)
-		if !ok || !occurrence.Equal(currentMinute) {
+		occurrence, ok := NextOccurrence(a, base, s.location)
+		if !ok {
 			continue
 		}
 
-		if lastFired[a.ID] == currentDate {
+		occurrenceKey := occurrence.Format("2006-01-02")
+
+		if a.Hue.Enabled {
+			lightingTime := occurrence.Add(
+				-time.Duration(a.Hue.StartOffsetMinutes) * time.Minute,
+			)
+
+			lightingDue := lightingTime.Equal(currentMinute) ||
+				(lightingTime.Before(currentMinute) &&
+					currentMinute.Before(occurrence))
+
+			if lightingDue && lightingFired[a.ID] != occurrenceKey {
+				lightingFired[a.ID] = occurrenceKey
+
+				if lightingTime.Before(currentMinute) {
+					log.Printf(
+						"scheduler: lighting start for alarm %q is overdue, starting now",
+						a.ID,
+					)
+				}
+
+				if err := s.executor.StartLighting(ctx, a); err != nil {
+					log.Printf(
+						"scheduler: failed to start lighting for alarm %q: %v",
+						a.ID,
+						err,
+					)
+				}
+			}
+		}
+
+		audioTime := occurrence.Add(
+			-time.Duration(a.Sonos.StartOffsetMinutes) * time.Minute,
+		)
+
+		audioOverdue := audioTime.Before(currentMinute) &&
+			currentMinute.Before(occurrence)
+
+		if (!audioTime.Equal(currentMinute) && !audioOverdue) ||
+			audioFired[a.ID] == occurrenceKey {
 			continue
 		}
 
-		lastFired[a.ID] = currentDate
+		audioFired[a.ID] = occurrenceKey
 
-		if err := s.executor.Execute(ctx, a); err != nil {
+		if audioOverdue {
 			log.Printf(
-				"scheduler: failed to execute alarm %q: %v",
+				"scheduler: audio start for alarm %q is overdue, starting now",
+				a.ID,
+			)
+		}
+
+		if err := s.executor.StartAudio(ctx, a); err != nil {
+			log.Printf(
+				"scheduler: failed to start audio for alarm %q: %v",
 				a.ID,
 				err,
 			)

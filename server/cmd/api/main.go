@@ -74,6 +74,7 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		cfg.AudioPort,
 		cfg.HueAPIKey,
 		cfg.SonosEnabled,
+		cfg.DataDir,
 		db.AlarmRepository,
 	)
 	if err != nil {

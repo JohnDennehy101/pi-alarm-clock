@@ -34,3 +34,8 @@ type Alarm struct {
 }
 
 var ErrNotFound = errors.New("alarm not found")
+
+// MaxStartOffsetMinutes bounds how far before the alarm time the wake-up
+// lighting or audio may start. It matches the CHECK constraint on the
+// alarms table.
+const MaxStartOffsetMinutes = 120
