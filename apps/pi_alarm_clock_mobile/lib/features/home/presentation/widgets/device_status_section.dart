@@ -30,7 +30,7 @@ class DeviceStatusSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final piConnected = healthStatus?.status == 'ok';
-    final sonosConnected = sonosResponse?.status.connected ?? false;
+    final sonosConnected = sonosResponse?.status.available ?? false;
     final hueConnected = hueStatus?.connected ?? false;
 
     return Column(
@@ -61,7 +61,7 @@ class DeviceStatusSection extends StatelessWidget {
             Expanded(
               child: DeviceStatusTile(
                 icon: Icons.speaker,
-                title: 'Audio',
+                title: 'Sonos',
                 status: _getStatusLabel(
                   connected: sonosConnected,
                   hasData: sonosResponse != null,

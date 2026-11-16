@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:pi_alarm_clock_mobile/features/home/domain/interfaces/home_api.dart';
 import 'package:pi_alarm_clock_mobile/features/home/domain/models/health_status.dart';
 import 'package:pi_alarm_clock_mobile/features/home/domain/models/hue_status.dart';
+import 'package:pi_alarm_clock_mobile/features/home/domain/models/sonos_groups_response.dart';
 import 'package:pi_alarm_clock_mobile/features/home/domain/models/sonos_response.dart';
 import 'package:pi_alarm_clock_mobile/services/api/api_client.dart';
 
