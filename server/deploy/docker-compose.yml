@@ -1,0 +1,12 @@
+services:
+  api:
+    image: pi-alarm-api:latest
+    container_name: pi-alarm-api
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    environment:
+      - DATA_DIR=/data
+      - TZ=Europe/Dublin
+    volumes:
+      - ./data:/data

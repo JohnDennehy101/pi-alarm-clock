@@ -1,0 +1,3 @@
+# Local dev state and secrets must not enter the build context
+.env
+data/
