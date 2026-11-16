@@ -1,5 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/widgets/alarm_empty_state.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/widgets/alarm_error_state.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/widgets/alarm_list_item.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/widgets/alarm_next_card.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/presentation/widgets/alarms_header.dart';
 import 'package:provider/provider.dart';
 
 import 'package:pi_alarm_clock_mobile/features/alarms/application/alarm_controller.dart';
@@ -22,14 +27,20 @@ class AlarmsScreen extends StatelessWidget {
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
-                sliver: SliverToBoxAdapter(child: _buildHeader(context, theme)),
+              const SliverPadding(
+                padding: EdgeInsets.fromLTRB(20, 24, 20, 16),
+                sliver: SliverToBoxAdapter(child: AlarmsHeader()),
               ),
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
                 sliver: SliverToBoxAdapter(
-                  child: _buildNextAlarm(context, theme, nextAlarm),
+                  child: AlarmNextCard(
+                    alarm: nextAlarm?.key,
+                    occurrence: nextAlarm?.value,
+                    scheduleText: nextAlarm == null
+                        ? null
+                        : _formatSchedule(context, nextAlarm.key),
+                  ),
                 ),
               ),
               SliverPadding(
@@ -59,19 +70,27 @@ class AlarmsScreen extends StatelessWidget {
                   child: Center(child: CircularProgressIndicator()),
                 )
               else if (controller.error != null && alarms.isEmpty)
-                SliverFillRemaining(child: _buildError(context, controller))
+                SliverFillRemaining(
+                  child: AlarmErrorState(onRetry: controller.load),
+                )
               else if (alarms.isEmpty)
-                SliverFillRemaining(child: _buildEmptyState(theme))
+                const SliverFillRemaining(child: AlarmEmptyState())
               else
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 20),
                   sliver: SliverList.separated(
                     itemCount: alarms.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (context, index) {
                       final alarm = alarms[index];
 
-                      return _buildAlarmCard(context, theme, alarm);
+                      return AlarmListItem(
+                        alarm: alarm,
+                        scheduleText: _formatSchedule(context, alarm),
+                        onTap: () => context.push('/alarms/${alarm.id}/edit'),
+                        onEnabledChanged: (enabled) =>
+                            _toggleAlarm(context, alarm, enabled),
+                      );
                     },
                   ),
                 ),
@@ -84,144 +103,6 @@ class AlarmsScreen extends StatelessWidget {
         onPressed: () => context.push('/alarms/new'),
         icon: const Icon(Icons.add),
         label: const Text('Add alarm'),
-      ),
-    );
-  }
-
-  Widget _buildHeader(BuildContext context, ThemeData theme) {
-    final now = DateTime.now();
-    final date = MaterialLocalizations.of(context).formatFullDate(now);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Alarms',
-          style: theme.textTheme.headlineSmall?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          date,
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildNextAlarm(
-    BuildContext context,
-    ThemeData theme,
-    MapEntry<Alarm, DateTime>? entry,
-  ) {
-    final alarm = entry?.key;
-    final occurrence = entry?.value;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: alarm == null
-          ? Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.alarm_off_outlined),
-                const SizedBox(height: 12),
-                Text('No upcoming alarms', style: theme.textTheme.titleLarge),
-                const SizedBox(height: 4),
-                const Text('Enable an alarm to see it here.'),
-              ],
-            )
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'NEXT ALARM',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const Icon(Icons.wb_twilight, size: 28),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  alarm.time,
-                  style: theme.textTheme.displayMedium?.copyWith(
-                    fontWeight: FontWeight.w300,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(alarm.name, style: theme.textTheme.titleMedium),
-                const SizedBox(height: 8),
-                Text(
-                  _formatSchedule(context, alarm),
-                  style: theme.textTheme.bodySmall,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  MaterialLocalizations.of(context)
-                      .formatMediumDate(occurrence!),
-                  style: theme.textTheme.bodySmall,
-                ),
-              ],
-            ),
-    );
-  }
-
-  Widget _buildAlarmCard(BuildContext context, ThemeData theme, Alarm alarm) {
-    return Material(
-      color: theme.colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: () => context.push('/alarms/${alarm.id}/edit'),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      alarm.time,
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w500,
-                        color: alarm.enabled
-                            ? theme.colorScheme.onSurface
-                            : theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(alarm.name, style: theme.textTheme.titleSmall),
-                    const SizedBox(height: 6),
-                    Text(
-                      _formatSchedule(context, alarm),
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Switch(
-                value: alarm.enabled,
-                onChanged: (enabled) => _toggleAlarm(context, alarm, enabled),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -240,54 +121,6 @@ class AlarmsScreen extends StatelessWidget {
         SnackBar(content: Text(controller.error ?? 'Could not update alarm.')),
       );
     }
-  }
-
-  Widget _buildEmptyState(ThemeData theme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.alarm_add_outlined,
-              size: 48,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(height: 16),
-            Text('No alarms yet', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 8),
-            Text(
-              'Add an alarm to get started.',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildError(BuildContext context, AlarmController controller) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.error_outline, size: 40),
-            const SizedBox(height: 12),
-            const Text('Could not load alarms.'),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: controller.load,
-              child: const Text('Retry'),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   MapEntry<Alarm, DateTime>? _findNextAlarm(List<Alarm> alarms) {

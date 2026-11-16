@@ -1,12 +1,12 @@
-import 'package:flutter/material.dart';
-import 'package:pi_alarm_clock_mobile/features/alarms/domain/models/alarm.dart';
+import 'package:flutter/foundation.dart';
 
-import '../infra/alarm_repository.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/domain/models/alarm.dart';
+import 'package:pi_alarm_clock_mobile/features/alarms/infra/alarm_repository.dart';
 
 class AlarmController extends ChangeNotifier {
-  final AlarmRepository repository;
+  AlarmController(this._repository);
 
-  AlarmController(this.repository);
+  final AlarmRepository _repository;
 
   List<Alarm> _alarms = [];
   bool _isLoading = false;
@@ -22,9 +22,9 @@ class AlarmController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      _alarms = await repository.getAlarms();
-    } catch (e) {
-      _error = e.toString();
+      _alarms = await _repository.getAlarms();
+    } catch (error) {
+      _error = error.toString();
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -32,43 +32,52 @@ class AlarmController extends ChangeNotifier {
   }
 
   Future<bool> create(Alarm alarm) async {
+    _error = null;
+
     try {
-      final created = await repository.createAlarm(alarm);
-      _alarms = [..._alarms, created];
+      final createdAlarm = await _repository.createAlarm(alarm);
+      _alarms = [..._alarms, createdAlarm];
       notifyListeners();
       return true;
-    } catch (e) {
-      _error = e.toString();
+    } catch (error) {
+      _error = error.toString();
       notifyListeners();
       return false;
     }
   }
 
   Future<bool> update(Alarm alarm) async {
+    _error = null;
+
     try {
-      final updated = await repository.updateAlarm(alarm);
+      final updatedAlarm = await _repository.updateAlarm(alarm);
 
       _alarms = _alarms
-          .map((existing) => existing.id == updated.id ? updated : existing)
+          .map(
+            (existing) =>
+                existing.id == updatedAlarm.id ? updatedAlarm : existing,
+          )
           .toList();
 
       notifyListeners();
       return true;
-    } catch (e) {
-      _error = e.toString();
+    } catch (error) {
+      _error = error.toString();
       notifyListeners();
       return false;
     }
   }
 
   Future<bool> delete(String id) async {
+    _error = null;
+
     try {
-      await repository.deleteAlarm(id);
+      await _repository.deleteAlarm(id);
       _alarms = _alarms.where((alarm) => alarm.id != id).toList();
       notifyListeners();
       return true;
-    } catch (e) {
-      _error = e.toString();
+    } catch (error) {
+      _error = error.toString();
       notifyListeners();
       return false;
     }
