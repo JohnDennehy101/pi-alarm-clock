@@ -10,17 +10,20 @@ import (
 )
 
 type AlarmExecutor struct {
-	sonos *SonosService
-	hue   *HueService
+	sonos      *SonosService
+	hue        *HueService
+	chromecast *ChromecastService
 }
 
 func NewAlarmExecutor(
 	sonos *SonosService,
 	hue *HueService,
+	chromecast *ChromecastService,
 ) *AlarmExecutor {
 	return &AlarmExecutor{
-		sonos: sonos,
-		hue:   hue,
+		sonos:      sonos,
+		hue:        hue,
+		chromecast: chromecast,
 	}
 }
 
@@ -40,6 +43,37 @@ func (e *AlarmExecutor) StartLighting(
 		if err := e.hue.RunWakeUpLighting(ctx, a.Hue); err != nil {
 			log.Printf(
 				"alarm %s: Hue wake-up lighting failed: %v",
+				a.ID,
+				err,
+			)
+		}
+	}()
+
+	return nil
+}
+
+func (e *AlarmExecutor) StartBoardDisplay(
+	ctx context.Context,
+	a alarm.Alarm,
+) error {
+	if !a.Chromecast.Enabled {
+		return nil
+	}
+
+	if e.chromecast == nil {
+		return fmt.Errorf(
+			"Chromecast is enabled but Chromecast service is not configured",
+		)
+	}
+
+	go func() {
+		if err := e.chromecast.RunBoardCast(
+			ctx,
+			a.Chromecast.DeviceID,
+			a.Chromecast.DisplayDurationMinutes,
+		); err != nil {
+			log.Printf(
+				"alarm %s: displaying Chromecast board failed: %v",
 				a.ID,
 				err,
 			)

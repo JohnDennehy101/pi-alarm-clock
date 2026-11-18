@@ -1,3 +1,4 @@
 .env
 /server/data/
 /server/deploy/deploy.env
+server/bin/

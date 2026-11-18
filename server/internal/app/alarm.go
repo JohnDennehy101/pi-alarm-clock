@@ -79,6 +79,11 @@ func (s *AlarmService) Delete(
 
 var alarmTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
+// chromecastMaxDisplayDurationMinutes matches the CHECK constraint on
+// the chromecast_display_duration column. Zero selects the default
+// duration.
+const chromecastMaxDisplayDurationMinutes = 240
+
 func validateAlarm(a *alarm.Alarm) error {
 	if a == nil {
 		return fmt.Errorf("alarm is required")
@@ -101,6 +106,10 @@ func validateAlarm(a *alarm.Alarm) error {
 	}
 
 	if err := validateHue(a.Hue); err != nil {
+		return err
+	}
+
+	if err := validateChromecast(a.Chromecast); err != nil {
 		return err
 	}
 
@@ -249,6 +258,34 @@ func validateHue(settings alarm.HueSettings) error {
 	if settings.ColourTemperature != 0 &&
 		(settings.ColourTemperature < 2000 || settings.ColourTemperature > 6500) {
 		return fmt.Errorf("Hue colour temperature must be between 2000 and 6500 Kelvin")
+	}
+
+	return nil
+}
+
+func validateChromecast(settings alarm.ChromecastSettings) error {
+	if !settings.Enabled {
+		return nil
+	}
+
+	if strings.TrimSpace(settings.DeviceID) == "" {
+		return fmt.Errorf("Chromecast device is required")
+	}
+
+	if settings.DisplayOffsetMinutes < 0 ||
+		settings.DisplayOffsetMinutes > alarm.MaxStartOffsetMinutes {
+		return fmt.Errorf(
+			"Chromecast display offset must be between 0 and %d minutes",
+			alarm.MaxStartOffsetMinutes,
+		)
+	}
+
+	if settings.DisplayDurationMinutes < 0 ||
+		settings.DisplayDurationMinutes > chromecastMaxDisplayDurationMinutes {
+		return fmt.Errorf(
+			"Chromecast display duration must be between 0 and %d minutes",
+			chromecastMaxDisplayDurationMinutes,
+		)
 	}
 
 	return nil

@@ -8,6 +8,22 @@ To simulate Raspberry Pi discovery (which will be enabled through DNS advertisem
 dns-sd -R "Pi Alarm Clock Test" _pialarmclock._tcp . 8080
 ```
 
+### macOS firewall
+
+The macOS application firewall prompts per binary, and `go run` compiles
+to a new path on every start — so each restart loses the exception and
+LAN devices (Sonos, Chromecast) silently fail to reach the served
+board/audio files. Build to a fixed path once and allow it:
+
+```bash
+go build -o bin/pi-alarm-api ./cmd/api
+./bin/pi-alarm-api
+```
+
+When macOS asks, click "Allow" (System Settings > Network > Firewall
+shows the list afterwards). On the Pi deployment target there is no
+macOS firewall.
+
 ## Deployment & Distribution
 
 The API is deployed to the Pi as a Docker image, built on the Mac with buildx

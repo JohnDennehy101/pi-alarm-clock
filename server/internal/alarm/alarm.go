@@ -26,8 +26,9 @@ type Alarm struct {
 	Days []Weekday  `json:"days,omitempty"`
 	Date *time.Time `json:"date,omitempty"`
 
-	Sonos SonosSettings `json:"sonos"`
-	Hue   HueSettings   `json:"hue"`
+	Sonos      SonosSettings      `json:"sonos"`
+	Hue        HueSettings        `json:"hue"`
+	Chromecast ChromecastSettings `json:"chromecast"`
 
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -36,6 +37,6 @@ type Alarm struct {
 var ErrNotFound = errors.New("alarm not found")
 
 // MaxStartOffsetMinutes bounds how far before the alarm time the wake-up
-// lighting or audio may start. It matches the CHECK constraint on the
-// alarms table.
+// lighting or audio may start, and how far after it the Chromecast image
+// may be displayed. It matches the CHECK constraints on the alarms table.
 const MaxStartOffsetMinutes = 120
