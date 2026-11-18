@@ -30,7 +30,7 @@ func main() {
 type application struct {
 	cfg          *config.Config
 	router       http.Handler
-	audioHandler http.Handler
+	mediaHandler http.Handler
 	certFile     string
 	keyFile      string
 	pin          string
@@ -71,9 +71,12 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 
 	services, err := app.NewServices(
 		ctx,
-		cfg.AudioPort,
+		cfg.MediaPort,
 		cfg.HueAPIKey,
 		cfg.SonosEnabled,
+		cfg.ChromecastEnabled,
+		cfg.WeatherLatitude,
+		cfg.WeatherLongitude,
 		cfg.DataDir,
 		db.AlarmRepository,
 	)
@@ -103,7 +106,7 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 	return &application{
 		cfg:          cfg,
 		router:       api.NewRouter(services, deviceStore, pairing),
-		audioHandler: newAudioHandler(),
+		mediaHandler: newMediaHandler(services),
 		certFile:     certFile,
 		keyFile:      keyFile,
 		pin:          pin,
@@ -113,9 +116,10 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 	}, nil
 }
 
-func newAudioHandler() http.Handler {
+func newMediaHandler(services *app.Services) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/audio/", http.StripPrefix("/audio/", audio.Handler()))
+	mux.Handle("/display/", services.Board.Handler())
 	return mux
 }
 
@@ -128,7 +132,7 @@ func (a *application) logStartup() {
 
 func serve(ctx context.Context, app *application) error {
 	apiServer := newServer(app.cfg.HTTPPort, app.router)
-	audioServer := newServer(app.cfg.AudioPort, app.audioHandler)
+	mediaServer := newServer(app.cfg.MediaPort, app.mediaHandler)
 
 	serverErrors := make(chan error, 2)
 
@@ -153,9 +157,9 @@ func serve(ctx context.Context, app *application) error {
 	}()
 
 	go func() {
-		log.Printf("HTTP audio listening on port %d", app.cfg.AudioPort)
-		if err := audioServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrors <- fmt.Errorf("audio server failed: %w", err)
+		log.Printf("HTTP media listening on port %d", app.cfg.MediaPort)
+		if err := mediaServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- fmt.Errorf("media server failed: %w", err)
 		}
 	}()
 
@@ -169,7 +173,7 @@ func serve(ctx context.Context, app *application) error {
 		return err
 	}
 
-	return shutdownServers(apiServer, audioServer)
+	return shutdownServers(apiServer, mediaServer)
 }
 
 func shutdownServers(servers ...*http.Server) error {

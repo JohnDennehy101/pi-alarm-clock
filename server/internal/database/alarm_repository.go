@@ -63,6 +63,8 @@ func (r *AlarmRepository) Create(
 			hue_start_brightness, hue_brightness,
 			hue_gradual_brightness, hue_brightness_duration,
 			hue_colour_temperature,
+			chromecast_enabled, chromecast_device_id,
+			chromecast_display_offset, chromecast_display_duration,
 			created_at, updated_at
 		)
 		VALUES (
@@ -75,6 +77,8 @@ func (r *AlarmRepository) Create(
 			?, ?,
 			?, ?,
 			?,
+			?, ?,
+			?, ?,
 			?, ?
 		)
 	`,
@@ -102,6 +106,10 @@ func (r *AlarmRepository) Create(
 		a.Hue.GradualBrightness,
 		a.Hue.BrightnessDuration,
 		colourTemperature,
+		a.Chromecast.Enabled,
+		a.Chromecast.DeviceID,
+		a.Chromecast.DisplayOffsetMinutes,
+		a.Chromecast.DisplayDurationMinutes,
 		now.Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
 	)
@@ -131,6 +139,8 @@ func (r *AlarmRepository) Get(
 			hue_start_brightness, hue_brightness,
 			hue_gradual_brightness, hue_brightness_duration,
 			hue_colour_temperature,
+			chromecast_enabled, chromecast_device_id,
+			chromecast_display_offset, chromecast_display_duration,
 			created_at, updated_at
 		FROM alarms
 		WHERE id = ?
@@ -161,6 +171,8 @@ func (r *AlarmRepository) List(
 			hue_start_brightness, hue_brightness,
 			hue_gradual_brightness, hue_brightness_duration,
 			hue_colour_temperature,
+			chromecast_enabled, chromecast_device_id,
+			chromecast_display_offset, chromecast_display_duration,
 			created_at, updated_at
 		FROM alarms
 		ORDER BY time ASC
@@ -234,11 +246,16 @@ func (r *AlarmRepository) Update(
 			sonos_start_offset = ?,
 			hue_enabled = ?,
 			hue_light_ids = ?,
+			hue_start_offset = ?,
 			hue_start_brightness = ?,
 			hue_brightness = ?,
 			hue_gradual_brightness = ?,
 			hue_brightness_duration = ?,
 			hue_colour_temperature = ?,
+			chromecast_enabled = ?,
+			chromecast_device_id = ?,
+			chromecast_display_offset = ?,
+			chromecast_display_duration = ?,
 			updated_at = ?
 		WHERE id = ?
 	`,
@@ -265,6 +282,10 @@ func (r *AlarmRepository) Update(
 		a.Hue.GradualBrightness,
 		a.Hue.BrightnessDuration,
 		colourTemperature,
+		a.Chromecast.Enabled,
+		a.Chromecast.DeviceID,
+		a.Chromecast.DisplayOffsetMinutes,
+		a.Chromecast.DisplayDurationMinutes,
 		now.Format(time.RFC3339Nano),
 		a.ID,
 	)
@@ -321,6 +342,7 @@ func scanAlarm(row rowScanner) (*alarm.Alarm, error) {
 		enabled           bool
 		gradualVolume     bool
 		hueEnabled        bool
+		castEnabled       bool
 		gradualBrightness bool
 		days              string
 		lightIDs          string
@@ -355,6 +377,10 @@ func scanAlarm(row rowScanner) (*alarm.Alarm, error) {
 		&gradualBrightness,
 		&a.Hue.BrightnessDuration,
 		&colourTemperature,
+		&castEnabled,
+		&a.Chromecast.DeviceID,
+		&a.Chromecast.DisplayOffsetMinutes,
+		&a.Chromecast.DisplayDurationMinutes,
 		&createdAt,
 		&updatedAt,
 	)
@@ -396,6 +422,7 @@ func scanAlarm(row rowScanner) (*alarm.Alarm, error) {
 	a.Sonos.GradualVolume = gradualVolume
 	a.Hue.Enabled = hueEnabled
 	a.Hue.GradualBrightness = gradualBrightness
+	a.Chromecast.Enabled = castEnabled
 
 	return &a, nil
 }

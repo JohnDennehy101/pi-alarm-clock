@@ -99,6 +99,10 @@ func NextOccurrence(
 
 const checkInterval = 15 * time.Second
 
+// castDisplayGrace bounds how late a Chromecast image can still be
+// displayed (e.g. after an API restart) before it is skipped.
+const castDisplayGrace = 5 * time.Minute
+
 type AlarmProvider interface {
 	List(ctx context.Context) ([]alarm.Alarm, error)
 }
@@ -106,6 +110,7 @@ type AlarmProvider interface {
 type AlarmExecutor interface {
 	StartAudio(ctx context.Context, a alarm.Alarm) error
 	StartLighting(ctx context.Context, a alarm.Alarm) error
+	StartBoardDisplay(ctx context.Context, a alarm.Alarm) error
 }
 
 type Scheduler struct {
@@ -141,15 +146,16 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 	audioFired := make(map[string]string)
 	lightingFired := make(map[string]string)
+	imageFired := make(map[string]string)
 
-	s.check(ctx, audioFired, lightingFired)
+	s.check(ctx, audioFired, lightingFired, imageFired)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.check(ctx, audioFired, lightingFired)
+			s.check(ctx, audioFired, lightingFired, imageFired)
 		}
 	}
 }
@@ -158,6 +164,7 @@ func (s *Scheduler) check(
 	ctx context.Context,
 	audioFired map[string]string,
 	lightingFired map[string]string,
+	imageFired map[string]string,
 ) {
 	alarms, err := s.alarms.List(ctx)
 	if err != nil {
@@ -200,6 +207,37 @@ func (s *Scheduler) check(
 				if err := s.executor.StartLighting(ctx, a); err != nil {
 					log.Printf(
 						"scheduler: failed to start lighting for alarm %q: %v",
+						a.ID,
+						err,
+					)
+				}
+			}
+		}
+
+		if a.Chromecast.Enabled {
+			imageTime := occurrence.Add(
+				time.Duration(a.Chromecast.DisplayOffsetMinutes) * time.Minute,
+			)
+
+			imageDeadline := imageTime.Add(castDisplayGrace)
+
+			imageDue := imageTime.Equal(currentMinute) ||
+				(imageTime.Before(currentMinute) &&
+					currentMinute.Before(imageDeadline))
+
+			if imageDue && imageFired[a.ID] != occurrenceKey {
+				imageFired[a.ID] = occurrenceKey
+
+				if imageTime.Before(currentMinute) {
+					log.Printf(
+						"scheduler: image display for alarm %q is overdue, starting now",
+						a.ID,
+					)
+				}
+
+				if err := s.executor.StartBoardDisplay(ctx, a); err != nil {
+					log.Printf(
+						"scheduler: failed to start image display for alarm %q: %v",
 						a.ID,
 						err,
 					)

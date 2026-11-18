@@ -42,6 +42,12 @@ func NewRouter(services *app.Services, devices *auth.Store, pairing *PairingHand
 	mux.HandleFunc("POST /api/v1/devices/hue/lights/on", a.turnHueOn)
 	mux.HandleFunc("POST /api/v1/devices/hue/lights/off", a.turnHueOff)
 
+	mux.HandleFunc("GET /api/v1/devices/chromecast", a.getChromecast)
+	mux.HandleFunc("POST /api/v1/devices/chromecast/discover", a.discoverChromecast)
+	mux.HandleFunc("POST /api/v1/devices/chromecast/connect", a.connectChromecast)
+	mux.HandleFunc("POST /api/v1/devices/chromecast/display", a.displayChromecastBoard)
+	mux.HandleFunc("POST /api/v1/devices/chromecast/stop", a.stopChromecastBoard)
+
 	mux.HandleFunc("POST /api/v1/audio/play", a.playAudio)
 	mux.HandleFunc("POST /api/v1/audio/stop", a.stopAudio)
 	mux.HandleFunc("PUT /api/v1/audio/volume", a.setVolume)
