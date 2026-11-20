@@ -33,7 +33,18 @@ func liveBoard(renderer *BoardRenderer) http.HandlerFunc {
 			return
 		}
 
-		png, err := renderer.RenderBoard(r.Context(), time.Now())
+		panel := PanelWeather
+		if value := r.URL.Query().Get("panel"); value != "" {
+			parsed, err := ParsePanel(value)
+			if err != nil {
+				http.Error(w, "unknown board panel", http.StatusBadRequest)
+				return
+			}
+
+			panel = parsed
+		}
+
+		png, err := renderer.RenderBoard(r.Context(), time.Now(), panel, nil)
 		if err != nil {
 			http.Error(w, "rendering board failed", http.StatusInternalServerError)
 			return

@@ -44,6 +44,7 @@ type ChromecastService struct {
 	persistPath      string
 
 	boardProvider BoardProvider
+	busStopNumber string
 }
 
 type persistedCastSelection struct {
@@ -64,6 +65,13 @@ func (s *ChromecastService) setBoardProvider(provider BoardProvider) {
 	defer s.mu.Unlock()
 
 	s.boardProvider = provider
+}
+
+func (s *ChromecastService) setBusStopNumber(stopNumber string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.busStopNumber = stopNumber
 }
 
 func (s *ChromecastService) Discover(
@@ -161,24 +169,49 @@ func (s *ChromecastService) CastBoard(
 	ctx context.Context,
 	deviceID string,
 	windowMinutes int,
+	stopNumber string,
 ) error {
-	urls, err := s.boardURLs(ctx, time.Now().Truncate(time.Minute), windowMinutes)
+	if windowMinutes <= 0 {
+		windowMinutes = 1
+	}
+
+	start := time.Now().Truncate(time.Minute)
+
+	firstURL, err := s.boardURL(ctx, start, start, stopNumber)
 	if err != nil {
 		return err
 	}
 
-	client, err := s.connectBoardRetry(ctx, deviceID, urls[0])
+	client, err := s.connectBoardRetry(ctx, deviceID, firstURL)
 	if err != nil {
 		return err
 	}
 
-	return client.Close()
+	if windowMinutes == 1 {
+		return client.Close()
+	}
+
+	go func() {
+		defer client.Close()
+
+		s.refreshBoardCast(
+			context.Background(),
+			client,
+			deviceID,
+			start,
+			windowMinutes,
+			stopNumber,
+		)
+	}()
+
+	return nil
 }
 
 func (s *ChromecastService) RunBoardCast(
 	ctx context.Context,
 	deviceID string,
 	windowMinutes int,
+	stopNumber string,
 ) error {
 	if windowMinutes <= 0 {
 		windowMinutes = chromecastDefaultDisplayDurationMinutes
@@ -186,20 +219,33 @@ func (s *ChromecastService) RunBoardCast(
 
 	start := time.Now().Truncate(time.Minute)
 
-	urls, err := s.boardURLs(ctx, start, windowMinutes)
+	firstURL, err := s.boardURL(ctx, start, start, stopNumber)
 	if err != nil {
 		return err
 	}
 
-	client, err := s.connectBoardRetry(ctx, deviceID, urls[0])
+	client, err := s.connectBoardRetry(ctx, deviceID, firstURL)
 	if err != nil {
 		return err
 	}
 
 	defer client.Close()
 
-	for {
-		timer := time.NewTimer(time.Until(time.Now().Add(time.Minute).Truncate(time.Minute)))
+	return s.refreshBoardCast(ctx, client, deviceID, start, windowMinutes, stopNumber)
+}
+
+func (s *ChromecastService) refreshBoardCast(
+	ctx context.Context,
+	client *chromecast.Client,
+	deviceID string,
+	start time.Time,
+	windowMinutes int,
+	stopNumber string,
+) error {
+	for minute := 1; minute < windowMinutes; minute++ {
+		nextMinute := start.Add(time.Duration(minute) * time.Minute)
+
+		timer := time.NewTimer(time.Until(nextMinute))
 
 		select {
 		case <-ctx.Done():
@@ -209,21 +255,13 @@ func (s *ChromecastService) RunBoardCast(
 		case <-timer.C:
 		}
 
-		minute := int(time.Since(start) / time.Minute)
-		if minute >= len(urls) {
-			if err := client.Stop(); err != nil {
-				log.Printf("Chromecast: stopping board after display window failed: %v", err)
-			}
-
-			log.Printf(
-				"Chromecast: display window ended after %d minutes",
-				windowMinutes,
-			)
-
-			return nil
+		imageURL, err := s.boardURL(ctx, start, nextMinute, stopNumber)
+		if err != nil {
+			log.Printf("Chromecast: rendering board failed: %v", err)
+			continue
 		}
 
-		if err := client.LoadImage(ctx, castURL(urls[minute])); err != nil {
+		if err := client.LoadImage(ctx, castURL(imageURL)); err != nil {
 			log.Printf("Chromecast: refreshing board failed: %v", err)
 
 			client.Close()
@@ -235,28 +273,38 @@ func (s *ChromecastService) RunBoardCast(
 			}
 
 			client = reconnected
+
+			if err := client.LoadImage(ctx, castURL(imageURL)); err != nil {
+				log.Printf("Chromecast: loading board after reconnect failed: %v", err)
+			}
 		}
 	}
+
+	if err := client.Stop(); err != nil {
+		log.Printf("Chromecast: stopping board after display window failed: %v", err)
+	}
+
+	return nil
 }
 
-func (s *ChromecastService) boardURLs(
+func (s *ChromecastService) boardURL(
 	ctx context.Context,
-	start time.Time,
-	windowMinutes int,
-) ([]string, error) {
+	sessionStart time.Time,
+	renderTime time.Time,
+	stopNumber string,
+) (string, error) {
 	s.mu.Lock()
 	provider := s.boardProvider
+	if stopNumber == "" {
+		stopNumber = s.busStopNumber
+	}
 	s.mu.Unlock()
 
 	if provider == nil {
-		return nil, fmt.Errorf("board provider is not configured")
+		return "", fmt.Errorf("board provider is not configured")
 	}
 
-	if windowMinutes < 1 {
-		windowMinutes = 1
-	}
-
-	return provider.BoardURLs(ctx, start, windowMinutes)
+	return provider.BoardURL(ctx, sessionStart, renderTime, stopNumber)
 }
 
 func (s *ChromecastService) connectBoardRetry(

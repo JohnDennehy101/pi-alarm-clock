@@ -24,6 +24,21 @@ When macOS asks, click "Allow" (System Settings > Network > Firewall
 shows the list afterwards). On the Pi deployment target there is no
 macOS firewall.
 
+## Board preview (dev)
+
+To test dashboard/board PNG rendering without casting to a Chromecast
+device, run the preview command. It writes one PNG per minute — the
+same sequence the alarm flow would cast, with bus due times updating
+across minutes — to `data/boards/<session>/`:
+
+```bash
+cd server
+go run ./cmd/dashboard/preview -minutes 25        # optional: -stop <number>
+```
+
+It loads `.env` and the cached bus timetable like the API does, and by
+design never contacts any Chromecast device.
+
 ## Deployment & Distribution
 
 The API is deployed to the Pi as a Docker image, built on the Mac with buildx

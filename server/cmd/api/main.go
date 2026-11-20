@@ -16,6 +16,7 @@ import (
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/app"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/bus"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/database"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/scheduler"
@@ -37,6 +38,7 @@ type application struct {
 	fingerprint  string
 	db           *database.Database
 	scheduler    *scheduler.Scheduler
+	timetable    *bus.Timetable
 }
 
 func run() error {
@@ -69,6 +71,11 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		return nil, fmt.Errorf("initialising database: %w", err)
 	}
 
+	timetable, err := loadBusTimetable(ctx, cfg.DataDir)
+	if err != nil {
+		log.Printf("Bus timetable unavailable: %v", err)
+	}
+
 	services, err := app.NewServices(
 		ctx,
 		cfg.MediaPort,
@@ -79,6 +86,11 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		cfg.WeatherLongitude,
 		cfg.DataDir,
 		db.AlarmRepository,
+		timetable,
+		cfg.BusStopNumber,
+		cfg.BusRealtimeURL,
+		cfg.BusRealtimeAPIKey,
+		cfg.BoardSchedule,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialising services: %w", err)
@@ -113,7 +125,35 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		fingerprint:  fingerprint,
 		db:           db,
 		scheduler:    alarmScheduler,
+		timetable:    timetable,
 	}, nil
+}
+
+func loadBusTimetable(ctx context.Context, dataDir string) (*bus.Timetable, error) {
+	datasetManager := bus.NewDatasetManager(
+		filepath.Join(dataDir, "bus"),
+	)
+
+	datasetPath, err := datasetManager.Ensure(ctx)
+	if err != nil && datasetPath == "" {
+		return nil, fmt.Errorf("ensuring bus dataset: %w", err)
+	}
+
+	if err != nil {
+		log.Printf("Bus timetable refresh failed; using cached dataset: %v", err)
+	}
+
+	location, err := time.LoadLocation("Europe/Dublin")
+	if err != nil {
+		return nil, fmt.Errorf("loading Dublin timezone: %w", err)
+	}
+
+	timetable, err := bus.NewTimetable(datasetPath, location)
+	if err != nil {
+		return nil, fmt.Errorf("loading bus timetable: %w", err)
+	}
+
+	return timetable, nil
 }
 
 func newMediaHandler(services *app.Services) http.Handler {
