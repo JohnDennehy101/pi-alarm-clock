@@ -8,6 +8,7 @@ import (
 
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/alarm"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/bus"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/display"
 )
 
@@ -32,15 +33,38 @@ func NewServices(
 	weatherLongitude float64,
 	dataDir string,
 	alarmRepository alarm.Repository,
+	timetable *bus.Timetable,
+	busStopNumber string,
+	busRealtimeURL string,
+	busRealtimeAPIKey string,
+	boardScheduleSpec string,
+	basemapProvider display.BasemapProvider,
 ) (*Services, error) {
+	boardSchedule, err := ParseBoardSchedule(boardScheduleSpec)
+	if err != nil {
+		return nil, fmt.Errorf("parsing board schedule: %w", err)
+	}
+
+	var realtimeClient *bus.RealtimeClient
+	if busRealtimeAPIKey != "" {
+		realtimeClient = bus.NewRealtimeClient(busRealtimeURL, busRealtimeAPIKey)
+	}
+
 	services := &Services{
 		Sonos:      NewSonosService(filepath.Join(dataDir, "sonos.json")),
 		Hue:        NewHueService(hueAPIKey),
 		Chromecast: NewChromecastService(filepath.Join(dataDir, "chromecast.json")),
-		Board:      NewBoardService(filepath.Join(dataDir, "boards")),
-		Weather:    NewWeatherService(weatherLatitude, weatherLongitude),
-		Alarm:      NewAlarmService(alarmRepository),
+		Board: NewBoardService(
+			filepath.Join(dataDir, "boards"),
+			timetable,
+			NewBusRealtimeService(realtimeClient),
+			boardSchedule,
+		),
+		Weather: NewWeatherService(weatherLatitude, weatherLongitude),
+		Alarm:   NewAlarmService(alarmRepository),
 	}
+
+	services.Chromecast.setBusStopNumber(busStopNumber)
 
 	services.Executor = NewAlarmExecutor(
 		services.Sonos,
@@ -48,7 +72,7 @@ func NewServices(
 		services.Chromecast,
 	)
 
-	services.initAudio(mediaPort, services.Weather)
+	services.initMedia(mediaPort, services.Weather, basemapProvider)
 	services.initBoardURL(mediaPort)
 	services.initSonos(ctx, sonosEnabled)
 	services.initHue(ctx, hueAPIKey)
@@ -57,7 +81,11 @@ func NewServices(
 	return services, nil
 }
 
-func (s *Services) initAudio(mediaPort int, weatherClient *WeatherService) {
+func (s *Services) initMedia(
+	mediaPort int,
+	weatherClient *WeatherService,
+	basemapProvider display.BasemapProvider,
+) {
 	audioManager, err := audio.NewAudioManager(mediaPort)
 	if err != nil {
 		log.Printf("Audio manager unavailable at startup: %v", err)
@@ -65,14 +93,12 @@ func (s *Services) initAudio(mediaPort int, weatherClient *WeatherService) {
 		s.Audio = audioManager
 	}
 
-	// A nil *WeatherService must become a nil interface here, otherwise
-	// the renderer would treat a typed-nil as a configured service.
 	var forecastSource display.WeatherService
 	if weatherClient != nil {
 		forecastSource = weatherClient
 	}
 
-	boardRenderer, err := display.NewBoardRenderer(forecastSource)
+	boardRenderer, err := display.NewBoardRenderer(forecastSource, basemapProvider)
 	if err != nil {
 		log.Printf("Board renderer unavailable at startup: %v", err)
 		return

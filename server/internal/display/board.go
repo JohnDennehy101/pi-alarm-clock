@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"fmt"
 	"image/color"
+	"strings"
 	"time"
 
 	"github.com/fogleman/gg"
@@ -24,8 +25,6 @@ const (
 	hourlySlots = 12
 )
 
-// WeatherService is anything that can supply the forecast shown on
-// the board. Defined here so display does not depend on its providers.
 type WeatherService interface {
 	Forecast(ctx context.Context) (*weather.Forecast, error)
 }
@@ -33,9 +32,66 @@ type WeatherService interface {
 type BoardRenderer struct {
 	font    *opentype.Font
 	weather WeatherService
+	basemap BasemapProvider
 }
 
-func NewBoardRenderer(weatherClient WeatherService) (*BoardRenderer, error) {
+type BusDeparture struct {
+	Route         string
+	Destination   string
+	ScheduledTime time.Time
+	ExpectedTime  time.Time
+	MinutesAway   int
+	IsRealtime    bool
+}
+
+type Panel int
+
+const (
+	PanelWeather Panel = iota
+	PanelBus
+	PanelBusMap
+	PanelBusProgress
+)
+
+func ParsePanel(value string) (Panel, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "weather":
+		return PanelWeather, nil
+	case "bus", "buses", "schedule":
+		return PanelBus, nil
+	case "map", "bus-map", "position":
+		return PanelBusMap, nil
+	case "progress", "track":
+		return PanelBusProgress, nil
+	default:
+		return PanelWeather, fmt.Errorf("unknown board panel %q", value)
+	}
+}
+
+func (p Panel) String() string {
+	switch p {
+	case PanelBus:
+		return "bus"
+	case PanelBusMap:
+		return "map"
+	case PanelBusProgress:
+		return "progress"
+	default:
+		return "weather"
+	}
+}
+
+type BoardView struct {
+	Panel      Panel
+	Departures []BusDeparture
+	Map        *MapBoard
+	Progress   *BusProgress
+}
+
+func NewBoardRenderer(
+	weatherClient WeatherService,
+	basemapProvider BasemapProvider,
+) (*BoardRenderer, error) {
 	parsed, err := opentype.Parse(fontData)
 	if err != nil {
 		return nil, fmt.Errorf("parsing board font: %w", err)
@@ -44,6 +100,7 @@ func NewBoardRenderer(weatherClient WeatherService) (*BoardRenderer, error) {
 	return &BoardRenderer{
 		font:    parsed,
 		weather: weatherClient,
+		basemap: basemapProvider,
 	}, nil
 }
 
@@ -63,6 +120,7 @@ func (r *BoardRenderer) face(size float64) font.Face {
 func (r *BoardRenderer) RenderBoard(
 	ctx context.Context,
 	now time.Time,
+	view BoardView,
 ) ([]byte, error) {
 	dc := gg.NewContext(boardWidth, boardHeight)
 
@@ -71,14 +129,15 @@ func (r *BoardRenderer) RenderBoard(
 
 	r.drawClock(dc, now)
 
-	if r.weather != nil {
-		forecast, err := r.weather.Forecast(ctx)
-		if err != nil {
-			r.drawWeatherUnavailable(dc, err)
-		} else {
-			r.drawCurrent(dc, now, forecast)
-			r.drawHourly(dc, now, forecast)
-		}
+	switch view.Panel {
+	case PanelBus:
+		r.drawBusDepartures(dc, view.Departures)
+	case PanelBusMap:
+		r.drawBusMap(ctx, dc, view.Map)
+	case PanelBusProgress:
+		r.drawBusProgress(dc, now, view.Progress)
+	default:
+		r.drawWeatherBoard(ctx, dc, now)
 	}
 
 	var buf bytes.Buffer
@@ -88,6 +147,109 @@ func (r *BoardRenderer) RenderBoard(
 	}
 
 	return buf.Bytes(), nil
+}
+
+func (r *BoardRenderer) drawWeatherBoard(
+	ctx context.Context,
+	dc *gg.Context,
+	now time.Time,
+) {
+	if r.weather == nil {
+		return
+	}
+
+	forecast, err := r.weather.Forecast(ctx)
+	if err != nil {
+		r.drawWeatherUnavailable(dc, err)
+		return
+	}
+
+	r.drawCurrent(dc, now, forecast)
+	r.drawHourly(dc, now, forecast)
+}
+
+func (r *BoardRenderer) drawBusDepartures(
+	dc *gg.Context,
+	departures []BusDeparture,
+) {
+	if len(departures) == 0 {
+		dc.SetFontFace(r.face(44))
+		dc.SetColor(color.RGBA{R: 130, G: 140, B: 155, A: 255})
+		dc.DrawStringAnchored(
+			"No upcoming departures",
+			boardWidth/2,
+			500,
+			0.5,
+			0.5,
+		)
+
+		return
+	}
+
+	right := float64(boardWidth) - 60
+
+	for i, departure := range departures {
+		baseline := 404.0 + 64.0*float64(i)
+
+		dc.SetFontFace(r.face(56))
+		dc.SetColor(color.RGBA{R: 235, G: 240, B: 245, A: 255})
+		dc.DrawString(departure.Route, 60, baseline)
+
+		routeWidth, _ := dc.MeasureString(departure.Route)
+
+		dc.SetFontFace(r.face(36))
+		dc.SetColor(color.RGBA{R: 154, G: 164, B: 178, A: 255})
+		dc.DrawString(
+			truncateToWidth(
+				dc,
+				departure.Destination,
+				right-60-routeWidth-40,
+			),
+			60+routeWidth+40,
+			baseline,
+		)
+
+		dc.SetFontFace(r.face(56))
+
+		if departure.IsRealtime {
+			dc.SetColor(color.RGBA{R: 96, G: 165, B: 250, A: 255})
+		} else {
+			dc.SetColor(color.RGBA{R: 235, G: 240, B: 245, A: 255})
+		}
+
+		minutesLabel := "due"
+		if departure.MinutesAway > 0 {
+			minutesLabel = fmt.Sprintf("%d min", departure.MinutesAway)
+		}
+
+		minutesWidth, _ := dc.MeasureString(minutesLabel)
+		dc.DrawString(minutesLabel, right-minutesWidth, baseline)
+
+		dc.SetFontFace(r.face(30))
+		dc.SetColor(color.RGBA{R: 130, G: 140, B: 155, A: 255})
+	}
+}
+
+func truncateToWidth(dc *gg.Context, text string, maxWidth float64) string {
+	if maxWidth <= 0 {
+		return text
+	}
+
+	width, _ := dc.MeasureString(text)
+	if width <= maxWidth {
+		return text
+	}
+
+	runes := []rune(text)
+	for len(runes) > 1 {
+		runes = runes[:len(runes)-1]
+
+		if w, _ := dc.MeasureString(string(runes) + "…"); w <= maxWidth {
+			break
+		}
+	}
+
+	return string(runes) + "…"
 }
 
 func (r *BoardRenderer) drawClock(dc *gg.Context, now time.Time) {

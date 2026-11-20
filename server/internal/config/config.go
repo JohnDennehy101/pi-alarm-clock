@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -17,6 +18,11 @@ type Config struct {
 	ChromecastEnabled bool
 	WeatherLatitude   float64
 	WeatherLongitude  float64
+	BusStopNumber     string
+	BusRealtimeURL    string
+	BusRealtimeAPIKey string
+	BoardSchedule     string
+	MapboxToken       string
 }
 
 func Load() (*Config, error) {
@@ -70,6 +76,11 @@ func Load() (*Config, error) {
 		ChromecastEnabled: chromecastEnabled,
 		WeatherLatitude:   weatherLatitude,
 		WeatherLongitude:  weatherLongitude,
+		BoardSchedule:     os.Getenv("BOARD_SCHEDULE"),
+		BusStopNumber:     strings.TrimSpace(os.Getenv("BUS_STOP_NUMBER")),
+		BusRealtimeURL:    strings.TrimSpace(os.Getenv("BUS_REALTIME_URL")),
+		BusRealtimeAPIKey: strings.TrimSpace(os.Getenv("BUS_REALTIME_API_KEY")),
+		MapboxToken:       strings.TrimSpace(os.Getenv("MAPBOX_TOKEN")),
 	}, nil
 }
 

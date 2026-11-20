@@ -10,21 +10,19 @@ import (
 
 const boardSessionsMaxAge = 24 * time.Hour
 
-func saveBoardImages(sessionDir string, images [][]byte) error {
+func saveBoardImage(sessionDir string, minute int, png []byte) error {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return fmt.Errorf("creating board session dir: %w", err)
 	}
 
-	for minute, png := range images {
-		name := fmt.Sprintf("minute-%02d.png", minute)
+	name := fmt.Sprintf("minute-%02d.png", minute)
 
-		if err := os.WriteFile(
-			filepath.Join(sessionDir, name),
-			png,
-			0o644,
-		); err != nil {
-			return fmt.Errorf("saving board minute %d: %w", minute, err)
-		}
+	if err := os.WriteFile(
+		filepath.Join(sessionDir, name),
+		png,
+		0o644,
+	); err != nil {
+		return fmt.Errorf("saving board minute %d: %w", minute, err)
 	}
 
 	return nil

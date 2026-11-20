@@ -24,6 +24,77 @@ When macOS asks, click "Allow" (System Settings > Network > Firewall
 shows the list afterwards). On the Pi deployment target there is no
 macOS firewall.
 
+## Board preview (dev)
+
+To test dashboard/board PNG rendering without casting to a Chromecast
+device, run the preview command. It writes one PNG per minute — the
+same sequence the alarm flow would cast — to `data/boards/<session>/`:
+each minute reflects the `BOARD_SCHEDULE` rotation (timetable, bus
+position map, per-bus tracking progress, weather), so bus due times
+count down, map positions advance, and the progress view's bus rotates
+across the approaching fleet:
+
+```bash
+cd server
+go run ./cmd/dashboard/preview -minutes 25        # optional: -stop <number>
+```
+
+It loads `.env` and the bus timetable exactly like the API. The first
+run parses the GTFS dataset and writes the binary timetable cache
+(`data/bus/timetable.cache`); later runs mmap that cache and start in
+under a second. By design it never contacts any Chromecast device.
+
+### Board schedule
+
+`BOARD_SCHEDULE` rotates panels on the alarm display. A bus panel's
+time can be split between views with a nested group: the timetable
+view (`schedule`), the live bus position map (`map`), and the per-bus
+tracking progress view (`progress`):
+
+```
+BOARD_SCHEDULE="bus:{map:2,schedule:2,progress:3},weather:1"
+BOARD_SCHEDULE="bus:5,weather:1"                   # shorthand: all bus time on the timetable
+```
+
+The map view shows buses approaching the configured stop within ~15
+minutes, drawn against the GTFS route shapes: the current position, a
+dashed ghost marker for the previous minute's position, a minutes-due
+label per bus, and the departure stop as a hollow square labelled with
+its stop number. Buses are coloured by punctuality: green on time or
+early, red late, and neutral white when only scheduled data exists.
+
+The progress view tracks one bus at a time, rotating across buses due
+within ~25 minutes: a route progress line showing how far along the
+route the bus has travelled toward your stop (with its previous-minute
+position), the expected vs scheduled arrival, and its realtime
+lateness — same green/red semantics as the map.
+
+The map's basemap background uses the Mapbox Static Images API, which
+needs a (free) access token and is cached to `data/basemap` for six
+hours, so board renders stay far below provider rate limits:
+
+```
+MAPBOX_TOKEN=pk....
+```
+
+Without a token the map panel still renders positions on a plain dark
+background.
+
+### Memory footprint
+
+The GTFS loader streams `stop_times.txt` and `shapes.txt` (the two
+multi-million-row files) record by record instead of loading them
+wholly, and each stop-time row persists as an eight-byte trip
+reference. The parsed result is then cached to
+`data/bus/timetable.cache` (one ~110 MB file), keyed by the sha256 of
+the GTFS zip, the schema version and the focus stop list. Subsequent
+boots mmap the cache — departures stay in the kernel page cache, not
+the Go heap: a warm start loads in under a second at around 150 MB
+resident, with a cold start peaking around 350 MB (and roughly half a
+minute of Pi CPU) only when the dataset changes. Only trips serving
+the configured `BUS_STOP_NUMBER` keep their route shapes and stop
+sequences beyond that.
+
 ## Deployment & Distribution
 
 The API is deployed to the Pi as a Docker image, built on the Mac with buildx
