@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/app"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/basemap"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/bus"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/display"
@@ -54,7 +55,7 @@ func run(minutes int, stop string) error {
 
 	ctx := context.Background()
 
-	timetable, err := loadTimetable(ctx, cfg.DataDir)
+	timetable, err := loadTimetable(ctx, cfg.DataDir, stop)
 	if err != nil {
 		log.Printf("Bus timetable unavailable: %v", err)
 	}
@@ -72,8 +73,19 @@ func run(minutes int, stop string) error {
 		schedule,
 	)
 
+	var basemapProvider display.BasemapProvider
+	if cfg.MapboxToken != "" {
+		basemapProvider = basemap.NewMapboxProvider(
+			cfg.MapboxToken,
+			filepath.Join(cfg.DataDir, "basemap"),
+		)
+	} else {
+		log.Printf("No MAPBOX_TOKEN configured; map panels render without a basemap")
+	}
+
 	renderer, err := display.NewBoardRenderer(
 		app.NewWeatherService(cfg.WeatherLatitude, cfg.WeatherLongitude),
+		basemapProvider,
 	)
 	if err != nil {
 		return fmt.Errorf("creating board renderer: %w", err)
@@ -117,7 +129,11 @@ func run(minutes int, stop string) error {
 	return nil
 }
 
-func loadTimetable(ctx context.Context, dataDir string) (*bus.Timetable, error) {
+func loadTimetable(
+	ctx context.Context,
+	dataDir string,
+	focusStopNumber string,
+) (*bus.Timetable, error) {
 	datasetPath, err := bus.NewDatasetManager(
 		filepath.Join(dataDir, "bus"),
 	).Ensure(ctx)
@@ -134,7 +150,12 @@ func loadTimetable(ctx context.Context, dataDir string) (*bus.Timetable, error) 
 		return nil, fmt.Errorf("loading Dublin timezone: %w", err)
 	}
 
-	timetable, err := bus.NewTimetable(datasetPath, location)
+	timetable, err := bus.OpenTimetable(
+		datasetPath,
+		filepath.Join(dataDir, "bus", "timetable.cache"),
+		location,
+		focusStopNumber,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("loading bus timetable: %w", err)
 	}

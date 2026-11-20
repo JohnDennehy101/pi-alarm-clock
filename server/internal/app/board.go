@@ -17,8 +17,10 @@ import (
 )
 
 const (
-	boardDeparturesShown = 5
-	boardScheduleDefault = "weather:5,bus:15"
+	boardDeparturesShown       = 5
+	boardScheduleDefault       = "weather:5,bus:15"
+	boardMapWindowMinutes      = 15
+	boardProgressWindowMinutes = 25
 )
 
 type BoardSegment struct {
@@ -35,26 +37,140 @@ func ParseBoardSchedule(spec string) (BoardSchedule, error) {
 
 	var schedule BoardSchedule
 
-	for _, entry := range strings.Split(spec, ",") {
-		name, minutesValue, found := strings.Cut(entry, ":")
-		if !found {
-			return nil, fmt.Errorf("invalid board schedule entry %q", entry)
-		}
-
-		panel, err := display.ParsePanel(name)
+	for _, entry := range splitScheduleEntries(spec) {
+		segments, err := parseScheduleEntry(entry)
 		if err != nil {
 			return nil, err
 		}
 
-		minutes, err := strconv.Atoi(strings.TrimSpace(minutesValue))
-		if err != nil || minutes < 1 {
-			return nil, fmt.Errorf("invalid board schedule duration %q", minutesValue)
-		}
-
-		schedule = append(schedule, BoardSegment{Panel: panel, Minutes: minutes})
+		schedule = append(schedule, segments...)
 	}
 
 	return schedule, nil
+}
+
+func splitScheduleEntries(spec string) []string {
+	var entries []string
+
+	depth := 0
+	start := 0
+
+	for i, r := range spec {
+		switch r {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				entries = append(entries, spec[start:i])
+				start = i + 1
+			}
+		}
+	}
+
+	if depth != 0 {
+		return []string{spec}
+	}
+
+	return append(entries, spec[start:])
+}
+
+func parseScheduleEntry(entry string) ([]BoardSegment, error) {
+	entry = strings.TrimSpace(entry)
+
+	if entry == "" {
+		return nil, fmt.Errorf("invalid board schedule entry %q", entry)
+	}
+
+	if open := strings.Index(entry, "{"); open >= 0 {
+		if !strings.HasSuffix(entry, "}") {
+			return nil, fmt.Errorf("invalid board schedule entry %q", entry)
+		}
+
+		name, remainder, found := strings.Cut(entry[:open], ":")
+		if !found || strings.TrimSpace(remainder) != "" {
+			return nil, fmt.Errorf(
+				"invalid board schedule entry %q",
+				entry,
+			)
+		}
+
+		name = strings.TrimSpace(name)
+		if name != "bus" {
+			return nil, fmt.Errorf(
+				"board view groups are only supported for bus, not %q",
+				name,
+			)
+		}
+
+		views := strings.TrimSuffix(entry[open+1:], "}")
+		var segments []BoardSegment
+
+		for _, view := range splitScheduleEntries(views) {
+			name, minutesValue, found := strings.Cut(view, ":")
+			if !found {
+				return nil, fmt.Errorf(
+					"invalid board schedule entry %q",
+					entry,
+				)
+			}
+
+			panel, err := ParseBusView(name)
+			if err != nil {
+				return nil, err
+			}
+
+			minutes, err := strconv.Atoi(strings.TrimSpace(minutesValue))
+			if err != nil || minutes < 1 {
+				return nil, fmt.Errorf(
+					"invalid board schedule duration %q",
+					minutesValue,
+				)
+			}
+
+			segments = append(segments, BoardSegment{
+				Panel:   panel,
+				Minutes: minutes,
+			})
+		}
+
+		if len(segments) == 0 {
+			return nil, fmt.Errorf("empty board view group %q", entry)
+		}
+
+		return segments, nil
+	}
+
+	name, minutesValue, found := strings.Cut(entry, ":")
+	if !found {
+		return nil, fmt.Errorf("invalid board schedule entry %q", entry)
+	}
+
+	panel, err := display.ParsePanel(name)
+	if err != nil {
+		return nil, err
+	}
+
+	minutes, err := strconv.Atoi(strings.TrimSpace(minutesValue))
+	if err != nil || minutes < 1 {
+		return nil, fmt.Errorf("invalid board schedule duration %q", minutesValue)
+	}
+
+	return []BoardSegment{{Panel: panel, Minutes: minutes}}, nil
+}
+
+func ParseBusView(name string) (display.Panel, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "schedule", "timetable":
+		return display.PanelBus, nil
+	case "map", "position":
+		return display.PanelBusMap, nil
+	case "progress", "track":
+		return display.PanelBusProgress, nil
+	default:
+		return display.PanelWeather, fmt.Errorf("unknown bus board view %q", name)
+	}
 }
 
 func (s BoardSchedule) PanelAt(minute int) display.Panel {
@@ -124,9 +240,6 @@ func (b *BoardService) setRenderer(renderer *display.BoardRenderer) {
 	b.renderer = renderer
 }
 
-// Configure installs a renderer and base URL so BoardURL can render
-// boards outside of the HTTP service lifecycle, e.g. the
-// cmd/dashboard/preview tool.
 func (b *BoardService) Configure(renderer *display.BoardRenderer, baseURL string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -185,18 +298,35 @@ func (b *BoardService) BoardURL(
 
 	panel := b.schedule.PanelAt(minute)
 
-	var departures []display.BusDeparture
+	view := display.BoardView{Panel: panel}
 
-	if panel == display.PanelBus {
-		var err error
-
-		departures, err = b.loadBusDepartures(ctx, stopNumber, renderTime)
+	switch panel {
+	case display.PanelBus:
+		departures, err := b.loadBusDepartures(ctx, stopNumber, renderTime)
 		if err != nil {
 			return "", fmt.Errorf("loading bus departures: %w", err)
 		}
+
+		view.Departures = departures
+
+	case display.PanelBusMap:
+		mapBoard, err := b.loadBusMap(stopNumber, renderTime)
+		if err != nil {
+			return "", fmt.Errorf("loading bus map: %w", err)
+		}
+
+		view.Map = mapBoard
+
+	case display.PanelBusProgress:
+		progress, err := b.loadBusProgress(stopNumber, renderTime, minute)
+		if err != nil {
+			return "", fmt.Errorf("loading bus progress: %w", err)
+		}
+
+		view.Progress = progress
 	}
 
-	image, err := renderer.RenderBoard(ctx, renderTime, panel, departures)
+	image, err := renderer.RenderBoard(ctx, renderTime, view)
 	if err != nil {
 		return "", fmt.Errorf("rendering board: %w", err)
 	}
@@ -213,6 +343,116 @@ func (b *BoardService) BoardURL(
 	name := fmt.Sprintf("minute-%02d.png", minute)
 
 	return fmt.Sprintf("%s/%s/%s", baseURL, session, name), nil
+}
+
+func (b *BoardService) approachingTrips(
+	stopNumber string,
+	renderTime time.Time,
+	windowMinutes int,
+) ([]bus.MapTrip, error) {
+	if b.timetable == nil || stopNumber == "" {
+		return nil, fmt.Errorf("bus timetable is not configured")
+	}
+
+	return b.timetable.MapTrips(
+		stopNumber,
+		renderTime,
+		windowMinutes,
+		b.realtime.Updates(),
+	)
+}
+
+func (b *BoardService) loadBusProgress(
+	stopNumber string,
+	renderTime time.Time,
+	minute int,
+) (*display.BusProgress, error) {
+	trips, err := b.approachingTrips(
+		stopNumber,
+		renderTime,
+		boardProgressWindowMinutes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(trips) == 0 {
+		return &display.BusProgress{StopNumber: stopNumber}, nil
+	}
+
+	trip := trips[minute%len(trips)]
+
+	return &display.BusProgress{
+		Route:            trip.Route,
+		Destination:      trip.Destination,
+		StopNumber:       stopNumber,
+		ProgressFraction: trip.ProgressFraction,
+		PreviousFraction: trip.PreviousFraction,
+		StopFractions:    trip.StopFractions,
+		StopsRemaining:   trip.StopsRemaining,
+		ExpectedArrival:  trip.Arrival,
+		ScheduledArrival: trip.ScheduledArrival,
+		IsRealtime:       trip.IsRealtime,
+	}, nil
+}
+
+func (b *BoardService) loadBusMap(
+	stopNumber string,
+	renderTime time.Time,
+) (*display.MapBoard, error) {
+	if b.timetable == nil || stopNumber == "" {
+		return nil, fmt.Errorf("bus timetable is not configured")
+	}
+
+	position, err := b.timetable.StopPosition(stopNumber)
+	if err != nil {
+		return nil, err
+	}
+
+	trips, err := b.approachingTrips(
+		stopNumber,
+		renderTime,
+		boardMapWindowMinutes,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	mapBoard := &display.MapBoard{
+		StopNumber: stopNumber,
+		StopPosition: display.MapPoint{
+			Lat: position.Lat,
+			Lon: position.Lon,
+		},
+		Trips: make([]display.MapTrip, 0, len(trips)),
+	}
+
+	for _, trip := range trips {
+		mapBoard.Trips = append(mapBoard.Trips, display.MapTrip{
+			Route:            trip.Route,
+			Destination:      trip.Destination,
+			ShapeID:          trip.ShapeID,
+			Position:         display.MapPoint{Lat: trip.Lat, Lon: trip.Lon},
+			Previous:         display.MapPoint{Lat: trip.PrevLat, Lon: trip.PrevLon},
+			MinutesToStop:    trip.MinutesToStop,
+			IsRealtime:       trip.IsRealtime,
+			Arrival:          trip.Arrival,
+			ScheduledArrival: trip.ScheduledArrival,
+			Polyline:         mapCoordinates(trip.Polyline),
+			Stops:            mapCoordinates(trip.Stops),
+		})
+	}
+
+	return mapBoard, nil
+}
+
+func mapCoordinates(coords []bus.MapCoordinate) []display.MapPoint {
+	points := make([]display.MapPoint, len(coords))
+	for i, coord := range coords {
+		points[i] = display.MapPoint{Lat: coord.Lat, Lon: coord.Lon}
+	}
+
+	return points
 }
 
 func (b *BoardService) loadBusDepartures(

@@ -38,6 +38,7 @@ func NewServices(
 	busRealtimeURL string,
 	busRealtimeAPIKey string,
 	boardScheduleSpec string,
+	basemapProvider display.BasemapProvider,
 ) (*Services, error) {
 	boardSchedule, err := ParseBoardSchedule(boardScheduleSpec)
 	if err != nil {
@@ -71,7 +72,7 @@ func NewServices(
 		services.Chromecast,
 	)
 
-	services.initMedia(mediaPort, services.Weather)
+	services.initMedia(mediaPort, services.Weather, basemapProvider)
 	services.initBoardURL(mediaPort)
 	services.initSonos(ctx, sonosEnabled)
 	services.initHue(ctx, hueAPIKey)
@@ -80,7 +81,11 @@ func NewServices(
 	return services, nil
 }
 
-func (s *Services) initMedia(mediaPort int, weatherClient *WeatherService) {
+func (s *Services) initMedia(
+	mediaPort int,
+	weatherClient *WeatherService,
+	basemapProvider display.BasemapProvider,
+) {
 	audioManager, err := audio.NewAudioManager(mediaPort)
 	if err != nil {
 		log.Printf("Audio manager unavailable at startup: %v", err)
@@ -93,7 +98,7 @@ func (s *Services) initMedia(mediaPort int, weatherClient *WeatherService) {
 		forecastSource = weatherClient
 	}
 
-	boardRenderer, err := display.NewBoardRenderer(forecastSource)
+	boardRenderer, err := display.NewBoardRenderer(forecastSource, basemapProvider)
 	if err != nil {
 		log.Printf("Board renderer unavailable at startup: %v", err)
 		return

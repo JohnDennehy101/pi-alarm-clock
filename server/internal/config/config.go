@@ -22,6 +22,7 @@ type Config struct {
 	BusRealtimeURL    string
 	BusRealtimeAPIKey string
 	BoardSchedule     string
+	MapboxToken       string
 }
 
 func Load() (*Config, error) {
@@ -79,6 +80,7 @@ func Load() (*Config, error) {
 		BusStopNumber:     strings.TrimSpace(os.Getenv("BUS_STOP_NUMBER")),
 		BusRealtimeURL:    strings.TrimSpace(os.Getenv("BUS_REALTIME_URL")),
 		BusRealtimeAPIKey: strings.TrimSpace(os.Getenv("BUS_REALTIME_API_KEY")),
+		MapboxToken:       strings.TrimSpace(os.Getenv("MAPBOX_TOKEN")),
 	}, nil
 }
 

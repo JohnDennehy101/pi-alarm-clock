@@ -16,9 +16,11 @@ import (
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/app"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/audio"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/auth"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/basemap"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/bus"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/config"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/database"
+	"github.com/johndennehy101/pi-alarm-clock/server/internal/display"
 	"github.com/johndennehy101/pi-alarm-clock/server/internal/scheduler"
 )
 
@@ -71,11 +73,10 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		return nil, fmt.Errorf("initialising database: %w", err)
 	}
 
-	timetable, err := loadBusTimetable(ctx, cfg.DataDir)
+	timetable, err := loadBusTimetable(ctx, cfg.DataDir, cfg.BusStopNumber)
 	if err != nil {
 		log.Printf("Bus timetable unavailable: %v", err)
 	}
-
 	services, err := app.NewServices(
 		ctx,
 		cfg.MediaPort,
@@ -91,6 +92,7 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 		cfg.BusRealtimeURL,
 		cfg.BusRealtimeAPIKey,
 		cfg.BoardSchedule,
+		newBasemapProvider(cfg),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialising services: %w", err)
@@ -129,7 +131,11 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 	}, nil
 }
 
-func loadBusTimetable(ctx context.Context, dataDir string) (*bus.Timetable, error) {
+func loadBusTimetable(
+	ctx context.Context,
+	dataDir string,
+	focusStopNumber string,
+) (*bus.Timetable, error) {
 	datasetManager := bus.NewDatasetManager(
 		filepath.Join(dataDir, "bus"),
 	)
@@ -148,12 +154,30 @@ func loadBusTimetable(ctx context.Context, dataDir string) (*bus.Timetable, erro
 		return nil, fmt.Errorf("loading Dublin timezone: %w", err)
 	}
 
-	timetable, err := bus.NewTimetable(datasetPath, location)
+	timetable, err := bus.OpenTimetable(
+		datasetPath,
+		filepath.Join(dataDir, "bus", "timetable.cache"),
+		location,
+		focusStopNumber,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("loading bus timetable: %w", err)
 	}
 
 	return timetable, nil
+}
+
+func newBasemapProvider(cfg *config.Config) display.BasemapProvider {
+	if cfg.MapboxToken == "" {
+		log.Println("Bus map basemap disabled: no MAPBOX_TOKEN configured")
+
+		return nil
+	}
+
+	return basemap.NewMapboxProvider(
+		cfg.MapboxToken,
+		filepath.Join(cfg.DataDir, "basemap"),
+	)
 }
 
 func newMediaHandler(services *app.Services) http.Handler {

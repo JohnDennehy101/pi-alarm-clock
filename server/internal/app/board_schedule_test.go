@@ -44,6 +44,120 @@ func TestParseBoardScheduleInvalid(t *testing.T) {
 	}
 }
 
+func TestParseBoardScheduleNestedBusViews(t *testing.T) {
+	schedule, err := ParseBoardSchedule("bus:{map:3,schedule:2},weather:1")
+	if err != nil {
+		t.Fatalf("ParseBoardSchedule: %v", err)
+	}
+
+	want := []struct {
+		panel   display.Panel
+		minutes int
+	}{
+		{display.PanelBusMap, 3},
+		{display.PanelBus, 2},
+		{display.PanelWeather, 1},
+	}
+
+	if len(schedule) != len(want) {
+		t.Fatalf("got %d segments, want %d", len(schedule), len(want))
+	}
+
+	for i, expected := range want {
+		if schedule[i].Panel != expected.panel ||
+			schedule[i].Minutes != expected.minutes {
+			t.Errorf(
+				"segment %d = %s:%d, want %s:%d",
+				i,
+				schedule[i].Panel,
+				schedule[i].Minutes,
+				expected.panel,
+				expected.minutes,
+			)
+		}
+	}
+}
+
+func TestParseBoardScheduleMapOnlyView(t *testing.T) {
+	schedule, err := ParseBoardSchedule("bus:{map:5}")
+	if err != nil {
+		t.Fatalf("ParseBoardSchedule: %v", err)
+	}
+
+	if len(schedule) != 1 || schedule[0].Panel != display.PanelBusMap {
+		t.Fatalf("schedule = %+v, want a single map segment", schedule)
+	}
+}
+
+func TestParseBoardScheduleAllBusViews(t *testing.T) {
+	schedule, err := ParseBoardSchedule(
+		"bus:{map:2,schedule:2,progress:2},weather:1",
+	)
+	if err != nil {
+		t.Fatalf("ParseBoardSchedule: %v", err)
+	}
+
+	want := []struct {
+		panel   display.Panel
+		minutes int
+	}{
+		{display.PanelBusMap, 2},
+		{display.PanelBus, 2},
+		{display.PanelBusProgress, 2},
+		{display.PanelWeather, 1},
+	}
+
+	if len(schedule) != len(want) {
+		t.Fatalf("got %d segments, want %d", len(schedule), len(want))
+	}
+
+	for i := range want {
+		if schedule[i].Panel != want[i].panel ||
+			schedule[i].Minutes != want[i].minutes {
+			t.Errorf(
+				"segment %d = %s:%d, want %s:%d",
+				i,
+				schedule[i].Panel,
+				schedule[i].Minutes,
+				want[i].panel,
+				want[i].minutes,
+			)
+		}
+	}
+}
+
+func TestParseBoardScheduleInvalidViewGroups(t *testing.T) {
+	for _, spec := range []string{
+		"bus:{map:2,schedule",        // unterminated group
+		"weather:{bus:2}",            // groups only supported for bus
+		"bus:{}",                     // empty group
+		"bus:{unknown:2}",            // unknown view
+		"bus:{map:x},weather:1",      // non-numeric duration
+		"bus:{map:0},weather:1",      // zero duration
+		"bus:{map:2}bogus,weather:1", // trailing garbage in group
+	} {
+		if _, err := ParseBoardSchedule(spec); err == nil {
+			t.Errorf("ParseBoardSchedule(%q) = nil error, want error", spec)
+		}
+	}
+}
+
+func TestSplitScheduleEntries(t *testing.T) {
+	entries := splitScheduleEntries("bus:{map:2,schedule:3},weather:1")
+
+	want := []string{"bus:{map:2,schedule:3}", "weather:1"}
+
+	if len(entries) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(entries), len(want))
+	}
+
+	for i, entry := range want {
+		if entries[i] != entry {
+			t.Errorf("entry %d = %q, want %q", i, entries[i], entry)
+		}
+	}
+}
+
 func TestBoardSchedulePanelAt(t *testing.T) {
 	schedule, err := ParseBoardSchedule("weather:5,bus:15")
 	if err != nil {

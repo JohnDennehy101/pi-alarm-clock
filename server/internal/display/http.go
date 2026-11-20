@@ -44,7 +44,9 @@ func liveBoard(renderer *BoardRenderer) http.HandlerFunc {
 			panel = parsed
 		}
 
-		png, err := renderer.RenderBoard(r.Context(), time.Now(), panel, nil)
+		png, err := renderer.RenderBoard(r.Context(), time.Now(), BoardView{
+			Panel: panel,
+		})
 		if err != nil {
 			http.Error(w, "rendering board failed", http.StatusInternalServerError)
 			return

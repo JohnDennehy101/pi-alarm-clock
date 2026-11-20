@@ -32,6 +32,7 @@ type WeatherService interface {
 type BoardRenderer struct {
 	font    *opentype.Font
 	weather WeatherService
+	basemap BasemapProvider
 }
 
 type BusDeparture struct {
@@ -48,28 +49,49 @@ type Panel int
 const (
 	PanelWeather Panel = iota
 	PanelBus
+	PanelBusMap
+	PanelBusProgress
 )
 
 func ParsePanel(value string) (Panel, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "weather":
 		return PanelWeather, nil
-	case "bus", "buses":
+	case "bus", "buses", "schedule":
 		return PanelBus, nil
+	case "map", "bus-map", "position":
+		return PanelBusMap, nil
+	case "progress", "track":
+		return PanelBusProgress, nil
 	default:
 		return PanelWeather, fmt.Errorf("unknown board panel %q", value)
 	}
 }
 
 func (p Panel) String() string {
-	if p == PanelBus {
+	switch p {
+	case PanelBus:
 		return "bus"
+	case PanelBusMap:
+		return "map"
+	case PanelBusProgress:
+		return "progress"
+	default:
+		return "weather"
 	}
-
-	return "weather"
 }
 
-func NewBoardRenderer(weatherClient WeatherService) (*BoardRenderer, error) {
+type BoardView struct {
+	Panel      Panel
+	Departures []BusDeparture
+	Map        *MapBoard
+	Progress   *BusProgress
+}
+
+func NewBoardRenderer(
+	weatherClient WeatherService,
+	basemapProvider BasemapProvider,
+) (*BoardRenderer, error) {
 	parsed, err := opentype.Parse(fontData)
 	if err != nil {
 		return nil, fmt.Errorf("parsing board font: %w", err)
@@ -78,6 +100,7 @@ func NewBoardRenderer(weatherClient WeatherService) (*BoardRenderer, error) {
 	return &BoardRenderer{
 		font:    parsed,
 		weather: weatherClient,
+		basemap: basemapProvider,
 	}, nil
 }
 
@@ -97,8 +120,7 @@ func (r *BoardRenderer) face(size float64) font.Face {
 func (r *BoardRenderer) RenderBoard(
 	ctx context.Context,
 	now time.Time,
-	panel Panel,
-	departures []BusDeparture,
+	view BoardView,
 ) ([]byte, error) {
 	dc := gg.NewContext(boardWidth, boardHeight)
 
@@ -107,9 +129,13 @@ func (r *BoardRenderer) RenderBoard(
 
 	r.drawClock(dc, now)
 
-	switch panel {
+	switch view.Panel {
 	case PanelBus:
-		r.drawBusDepartures(dc, departures)
+		r.drawBusDepartures(dc, view.Departures)
+	case PanelBusMap:
+		r.drawBusMap(ctx, dc, view.Map)
+	case PanelBusProgress:
+		r.drawBusProgress(dc, now, view.Progress)
 	default:
 		r.drawWeatherBoard(ctx, dc, now)
 	}

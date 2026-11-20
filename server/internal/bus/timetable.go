@@ -14,16 +14,23 @@ import (
 )
 
 type Timetable struct {
-	location *time.Location
-
-	stopIDs      map[string]string
-	departures   map[string][]scheduledDeparture
-	calendars    map[string]serviceCalendar
-	exceptions   map[string]map[string]int
-	tripMetadata map[string]scheduledDeparture
+	location   *time.Location
+	stopIDs    map[string]string
+	stopPlaces map[string]stopPosition
+	departures map[string][]stopDeparture
+	calendars  map[string]serviceCalendar
+	exceptions map[string]map[string]int
+	tripIndex  map[string]int
+	tripInfos  []tripInfo
+	focusTrips map[string]*focusTrip
+	cacheMmap  []byte
 }
 
-func NewTimetable(zipPath string, location *time.Location) (*Timetable, error) {
+func NewTimetable(
+	zipPath string,
+	location *time.Location,
+	focusStopNumbers ...string,
+) (*Timetable, error) {
 	if location == nil {
 		return nil, fmt.Errorf("timezone is required")
 	}
@@ -37,191 +44,195 @@ func NewTimetable(zipPath string, location *time.Location) (*Timetable, error) {
 	timetable := &Timetable{
 		location:   location,
 		stopIDs:    make(map[string]string),
-		departures: make(map[string][]scheduledDeparture),
+		stopPlaces: make(map[string]stopPosition),
+		departures: make(map[string][]stopDeparture),
 		calendars:  make(map[string]serviceCalendar),
 		exceptions: make(map[string]map[string]int),
+		tripIndex:  make(map[string]int),
 	}
 
-	files, err := readGTFSFiles(&reader.Reader)
-	if err != nil {
+	if err := timetable.loadStops(&reader.Reader); err != nil {
 		return nil, err
 	}
 
-	if err := timetable.loadStops(files); err != nil {
+	if err := timetable.loadRoutesAndTrips(&reader.Reader); err != nil {
 		return nil, err
 	}
 
-	if err := timetable.loadRoutesAndTrips(files); err != nil {
+	if err := timetable.loadCalendars(&reader.Reader); err != nil {
 		return nil, err
 	}
 
-	if err := timetable.loadCalendars(files); err != nil {
+	if err := timetable.loadStopTimes(&reader.Reader); err != nil {
 		return nil, err
 	}
 
-	if err := timetable.loadStopTimes(files); err != nil {
+	if err := timetable.loadFocusTrips(&reader.Reader, focusStopNumbers); err != nil {
 		return nil, err
 	}
 
 	return timetable, nil
 }
 
-func readGTFSFiles(reader *zip.Reader) (map[string][]map[string]string, error) {
-	files := make(map[string][]map[string]string)
-
+func (t *Timetable) streamCSV(
+	reader *zip.Reader,
+	name string,
+	rowFn func(record []string, headers map[string]int) error,
+) error {
 	for _, file := range reader.File {
-		name := path.Base(file.Name)
-
-		if !strings.HasSuffix(name, ".txt") {
+		if path.Base(file.Name) != name {
 			continue
 		}
 
-		content, err := readCSVFile(file)
+		rc, err := file.Open()
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", name, err)
+			return fmt.Errorf("open %s: %w", name, err)
 		}
+		defer rc.Close()
 
-		files[name] = content
-	}
+		csvReader := csv.NewReader(rc)
+		csvReader.FieldsPerRecord = -1
+		csvReader.ReuseRecord = true
 
-	return files, nil
-}
-
-func readCSVFile(file *zip.File) ([]map[string]string, error) {
-	reader, err := file.Open()
-	if err != nil {
-		return nil, err
-	}
-	defer reader.Close()
-
-	csvReader := csv.NewReader(reader)
-	csvReader.FieldsPerRecord = -1
-
-	headers, err := csvReader.Read()
-	if err != nil {
-		return nil, err
-	}
-
-	for i := range headers {
-		headers[i] = strings.TrimPrefix(headers[i], "\ufeff")
-		headers[i] = strings.TrimSpace(headers[i])
-	}
-
-	var rows []map[string]string
-
-	for {
 		record, err := csvReader.Read()
-		if err == io.EOF {
-			break
-		}
 		if err != nil {
-			return nil, err
+			if err == io.EOF {
+				return nil
+			}
+
+			return fmt.Errorf("read %s header: %w", name, err)
 		}
 
-		row := make(map[string]string, len(headers))
+		headers := make(map[string]int, len(record))
+		for i, header := range record {
+			headers[strings.TrimPrefix(
+				strings.TrimSpace(header),
+				"\ufeff",
+			)] = i
+		}
 
-		for i, header := range headers {
-			if i < len(record) {
-				row[header] = strings.TrimSpace(record[i])
+		for {
+			record, err := csvReader.Read()
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("read %s: %w", name, err)
+			}
+
+			if err := rowFn(record, headers); err != nil {
+				return err
 			}
 		}
-
-		rows = append(rows, row)
-	}
-
-	return rows, nil
-}
-
-func (t *Timetable) loadStops(files map[string][]map[string]string) error {
-	for _, row := range files["stops.txt"] {
-		stopNumber := row["stop_code"]
-		stopID := row["stop_id"]
-
-		if stopNumber == "" || stopID == "" {
-			continue
-		}
-
-		t.stopIDs[stopNumber] = stopID
 	}
 
 	return nil
 }
 
-func (t *Timetable) loadRoutesAndTrips(files map[string][]map[string]string) error {
-	routes := make(map[string]string)
+func field(record []string, headers map[string]int, name string) string {
+	index, ok := headers[name]
+	if !ok || index >= len(record) || index < 0 {
+		return ""
+	}
 
-	for _, row := range files["routes.txt"] {
-		routeID := row["route_id"]
-		routeName := row["route_short_name"]
+	return record[index]
+}
 
-		if routeID == "" {
-			continue
+func (t *Timetable) loadStops(reader *zip.Reader) error {
+	return t.streamCSV(reader, "stops.txt", func(record []string, headers map[string]int) error {
+		stopNumber := field(record, headers, "stop_code")
+		stopID := field(record, headers, "stop_id")
+		if stopNumber == "" || stopID == "" {
+			return nil
 		}
 
+		t.stopIDs[stopNumber] = stopID
+
+		lat, latErr := strconv.ParseFloat(field(record, headers, "stop_lat"), 64)
+		lon, lonErr := strconv.ParseFloat(field(record, headers, "stop_lon"), 64)
+		if latErr == nil && lonErr == nil {
+			t.stopPlaces[stopID] = stopPosition{Lat: lat, Lon: lon}
+		}
+
+		return nil
+	})
+}
+
+func (t *Timetable) loadRoutesAndTrips(reader *zip.Reader) error {
+	routes := make(map[string]string)
+
+	if err := t.streamCSV(reader, "routes.txt", func(record []string, headers map[string]int) error {
+		routeID := field(record, headers, "route_id")
+		if routeID == "" {
+			return nil
+		}
+
+		routeName := field(record, headers, "route_short_name")
 		if routeName == "" {
 			routeName = routeID
 		}
 
 		routes[routeID] = routeName
+
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	trips := make(map[string]scheduledDeparture)
-
-	for _, row := range files["trips.txt"] {
-		tripID := row["trip_id"]
+	return t.streamCSV(reader, "trips.txt", func(record []string, headers map[string]int) error {
+		tripID := field(record, headers, "trip_id")
 		if tripID == "" {
-			continue
+			return nil
 		}
 
-		routeID := row["route_id"]
-
-		trips[tripID] = scheduledDeparture{
-			ServiceID:   row["service_id"],
+		t.tripIndex[tripID] = len(t.tripInfos)
+		t.tripInfos = append(t.tripInfos, tripInfo{
 			TripID:      tripID,
-			Route:       routes[routeID],
-			Destination: row["trip_headsign"],
-		}
-	}
+			ServiceID:   field(record, headers, "service_id"),
+			Route:       routes[field(record, headers, "route_id")],
+			Destination: field(record, headers, "trip_headsign"),
+			ShapeID:     field(record, headers, "shape_id"),
+		})
 
-	// Temporarily store the trip metadata so loadStopTimes can use it.
-	t.tripMetadata = trips
-
-	return nil
+		return nil
+	})
 }
 
-func (t *Timetable) loadCalendars(files map[string][]map[string]string) error {
-	for _, row := range files["calendar.txt"] {
-		startDate, err := parseGTFSDate(row["start_date"], t.location)
+func (t *Timetable) loadCalendars(reader *zip.Reader) error {
+	if err := t.streamCSV(reader, "calendar.txt", func(record []string, headers map[string]int) error {
+		startDate, err := parseGTFSDate(field(record, headers, "start_date"), t.location)
 		if err != nil {
 			return fmt.Errorf("parse calendar start date: %w", err)
 		}
 
-		endDate, err := parseGTFSDate(row["end_date"], t.location)
+		endDate, err := parseGTFSDate(field(record, headers, "end_date"), t.location)
 		if err != nil {
 			return fmt.Errorf("parse calendar end date: %w", err)
 		}
 
-		calendar := serviceCalendar{
+		t.calendars[field(record, headers, "service_id")] = serviceCalendar{
 			StartDate: startDate,
 			EndDate:   endDate,
 			Weekdays: [7]bool{
-				row["monday"] == "1",
-				row["tuesday"] == "1",
-				row["wednesday"] == "1",
-				row["thursday"] == "1",
-				row["friday"] == "1",
-				row["saturday"] == "1",
-				row["sunday"] == "1",
+				field(record, headers, "monday") == "1",
+				field(record, headers, "tuesday") == "1",
+				field(record, headers, "wednesday") == "1",
+				field(record, headers, "thursday") == "1",
+				field(record, headers, "friday") == "1",
+				field(record, headers, "saturday") == "1",
+				field(record, headers, "sunday") == "1",
 			},
 		}
 
-		t.calendars[row["service_id"]] = calendar
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	for _, row := range files["calendar_dates.txt"] {
-		serviceID := row["service_id"]
+	return t.streamCSV(reader, "calendar_dates.txt", func(record []string, headers map[string]int) error {
+		serviceID := field(record, headers, "service_id")
 
-		date, err := parseGTFSDate(row["date"], t.location)
+		date, err := parseGTFSDate(field(record, headers, "date"), t.location)
 		if err != nil {
 			return fmt.Errorf("parse calendar exception date: %w", err)
 		}
@@ -230,55 +241,68 @@ func (t *Timetable) loadCalendars(files map[string][]map[string]string) error {
 			t.exceptions[serviceID] = make(map[string]int)
 		}
 
-		exceptionType, err := strconv.Atoi(row["exception_type"])
+		exceptionType, err := strconv.Atoi(field(record, headers, "exception_type"))
 		if err != nil {
 			return fmt.Errorf("parse calendar exception type: %w", err)
 		}
 
 		t.exceptions[serviceID][date.Format("20060102")] = exceptionType
-	}
 
-	return nil
+		return nil
+	})
 }
 
-func (t *Timetable) loadStopTimes(files map[string][]map[string]string) error {
-	for _, row := range files["stop_times.txt"] {
-		stopID := row["stop_id"]
-		tripID := row["trip_id"]
-
-		trip, exists := t.tripMetadata[tripID]
-		if !exists {
-			continue
+func (t *Timetable) loadStopTimes(reader *zip.Reader) error {
+	return t.streamCSV(reader, "stop_times.txt", func(record []string, headers map[string]int) error {
+		tripKey, ok := headerField(headers, "trip_id")
+		if !ok || tripKey >= len(record) {
+			return nil
 		}
 
-		departureValue := row["departure_time"]
+		tripIndex, ok := t.tripIndex[record[tripKey]]
+		if !ok {
+			return nil
+		}
+
+		stopKey, ok := headerField(headers, "stop_id")
+		if !ok || stopKey >= len(record) {
+			return nil
+		}
+
+		departureValue := field(record, headers, "departure_time")
 		if departureValue == "" {
-			departureValue = row["arrival_time"]
+			departureValue = field(record, headers, "arrival_time")
 		}
 
-		departureTime, err := parseGTFSTime(departureValue)
+		departure, err := parseGTFSTime(departureValue)
 		if err != nil {
-			return fmt.Errorf("parse departure time for trip %s: %w", tripID, err)
+			return nil
 		}
 
-		departure := trip
-		departure.Departure = departureTime
+		stopID := record[stopKey]
 
 		t.departures[stopID] = append(
 			t.departures[stopID],
-			departure,
+			stopDeparture{
+				TripIndex: int32(tripIndex),
+				Seconds:   int32(departure / time.Second),
+			},
 		)
-	}
 
-	return nil
+		return nil
+	})
+}
+
+func headerField(headers map[string]int, name string) (int, bool) {
+	index, ok := headers[name]
+
+	return index, ok
 }
 
 func parseGTFSDate(value string, location *time.Location) (time.Time, error) {
 	return time.ParseInLocation("20060102", value, location)
 }
 
-// GTFS allows hours greater than 23, e.g. 25:15:00.
-// These represent times after midnight on the following day.
 func parseGTFSTime(value string) (time.Duration, error) {
 	parts := strings.Split(value, ":")
 	if len(parts) != 3 {
@@ -326,11 +350,7 @@ func (t *Timetable) GetDepartures(
 	now = now.In(t.location)
 
 	today := time.Date(
-		now.Year(),
-		now.Month(),
-		now.Day(),
-		0, 0, 0, 0,
-		t.location,
+		now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, t.location,
 	)
 
 	var results []Departure
@@ -339,11 +359,15 @@ func (t *Timetable) GetDepartures(
 		serviceDate := today.AddDate(0, 0, offset)
 
 		for _, scheduled := range t.departures[stopID] {
-			if !t.isServiceActive(scheduled.ServiceID, serviceDate) {
+			info := t.tripInfos[scheduled.TripIndex]
+
+			if !t.isServiceActive(info.ServiceID, serviceDate) {
 				continue
 			}
 
-			departureTime := serviceDate.Add(scheduled.Departure)
+			departureTime := serviceDate.Add(
+				time.Duration(scheduled.Seconds) * time.Second,
+			)
 
 			if departureTime.Before(now) {
 				continue
@@ -356,9 +380,9 @@ func (t *Timetable) GetDepartures(
 			results = append(results, Departure{
 				StopNumber:    stopNumber,
 				StopID:        stopID,
-				TripID:        scheduled.TripID,
-				Route:         scheduled.Route,
-				Destination:   scheduled.Destination,
+				TripID:        info.TripID,
+				Route:         info.Route,
+				Destination:   info.Destination,
 				ScheduledTime: departureTime,
 				ExpectedTime:  departureTime,
 				MinutesAway:   minutesAway,

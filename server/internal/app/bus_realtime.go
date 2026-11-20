@@ -25,6 +25,27 @@ func (s *BusRealtimeService) Enabled() bool {
 	return s != nil && s.client != nil
 }
 
+func (s *BusRealtimeService) Updates() map[string]map[string]time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.Enabled() || len(s.updates) == 0 {
+		return nil
+	}
+
+	updates := make(map[string]map[string]time.Time, len(s.updates))
+	for stopID, byTrip := range s.updates {
+		stop := make(map[string]time.Time, len(byTrip))
+		for tripID, expected := range byTrip {
+			stop[tripID] = expected
+		}
+
+		updates[stopID] = stop
+	}
+
+	return updates
+}
+
 func (s *BusRealtimeService) Refresh(ctx context.Context, stopNumber string) error {
 	if !s.Enabled() || stopNumber == "" {
 		return nil
