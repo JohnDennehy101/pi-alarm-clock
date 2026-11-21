@@ -212,12 +212,7 @@ type BoardService struct {
 }
 
 type BoardProvider interface {
-	// ResolveTimeline maps a per-alarm order string (preset name or
-	// comma-separated view list) to a playable timeline.
 	ResolveTimeline(order string) (*Timeline, error)
-
-	// BoardURLForTimeline renders the frame due at renderTime for a
-	// specific timeline and returns its media URL.
 	BoardURLForTimeline(
 		ctx context.Context,
 		sessionStart time.Time,
@@ -247,9 +242,6 @@ func NewBoardService(
 	}
 }
 
-// ResolveTimeline returns the timeline for a per-alarm order string:
-// empty keeps the server default, a name selects a preset, and a
-// comma-separated list is a one-off order.
 func (b *BoardService) ResolveTimeline(order string) (*Timeline, error) {
 	if strings.TrimSpace(order) == "" || b.catalog == nil {
 		return b.timeline, nil

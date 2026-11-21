@@ -79,9 +79,6 @@ func (s *AlarmService) Delete(
 
 var alarmTimePattern = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
-// chromecastMaxDisplayDurationMinutes matches the CHECK constraint on
-// the chromecast_display_duration column. Zero selects the default
-// duration.
 const chromecastMaxDisplayDurationMinutes = 240
 
 func validateAlarm(a *alarm.Alarm) error {
@@ -288,9 +285,6 @@ func validateChromecast(settings alarm.ChromecastSettings) error {
 		)
 	}
 
-	// The order string is only shape-checked here: it is resolved
-	// against the board timeline catalog when the alarm fires, so
-	// presets can change without editing alarms.
 	if len(settings.BoardTimeline) > 200 {
 		return fmt.Errorf("Chromecast board timeline is too long")
 	}

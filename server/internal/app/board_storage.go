@@ -10,8 +10,6 @@ import (
 
 const boardSessionsMaxAge = 24 * time.Hour
 
-// saveBoardImage writes a board frame atomically: the cast device
-// must never observe a half-written image.
 func saveBoardImage(sessionDir string, name string, png []byte) error {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return fmt.Errorf("creating board session dir: %w", err)

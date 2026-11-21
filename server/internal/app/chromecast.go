@@ -17,13 +17,8 @@ import (
 
 const (
 	chromecastDefaultDisplayDurationMinutes = 60
-
-	// loadRetries bounds how often a board load is attempted; the first
-	// load after a TV wakes from standby often exceeds the cast
-	// protocol's short launch timeout, but succeeds on the follow-up.
-	loadRetries = 2
-
-	loadRetryDelay = 5 * time.Second
+	loadRetries                             = 2
+	loadRetryDelay                          = 5 * time.Second
 )
 
 type ChromecastStatus struct {
@@ -165,10 +160,6 @@ func (s *ChromecastService) Status() ChromecastStatus {
 	}
 }
 
-// CastBoard starts a board cast on the selected device. The order
-// string selects the timeline (empty for default, a preset name, or a
-// comma-separated view list). The cast keeps running in the
-// background until the window elapses.
 func (s *ChromecastService) CastBoard(
 	ctx context.Context,
 	deviceID string,
@@ -218,9 +209,6 @@ func (s *ChromecastService) CastBoard(
 	return nil
 }
 
-// RunBoardCast is the alarm-fired variant of CastBoard: an invalid
-// order falls back to the default timeline instead of failing, so a
-// 7am alarm still shows a board.
 func (s *ChromecastService) RunBoardCast(
 	ctx context.Context,
 	deviceID string,
@@ -267,7 +255,6 @@ func (s *ChromecastService) RunBoardCast(
 	)
 }
 
-// timelineFor resolves an order string against the board provider.
 func (s *ChromecastService) timelineFor(order string) (*Timeline, error) {
 	s.mu.Lock()
 	provider := s.boardProvider
@@ -280,9 +267,6 @@ func (s *ChromecastService) timelineFor(order string) (*Timeline, error) {
 	return provider.ResolveTimeline(order)
 }
 
-// refreshBoardCast keeps the cast in step with the timeline: it sleeps
-// until each next boundary (a step change or refresh tick), re-renders
-// the due frame, and loads it. The window closes after windowMinutes.
 func (s *ChromecastService) refreshBoardCast(
 	ctx context.Context,
 	client *chromecast.Client,

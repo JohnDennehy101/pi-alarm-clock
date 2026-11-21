@@ -12,37 +12,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A board timeline is the flattened, looping sequence of board views
-// an alarm casts: a list of steps, each with how long it owns the
-// screen and how often it re-renders (rotating its items, for views
-// like bus progress). The catalog in data/board-timeline.yml defines
-// view settings and named order presets; each alarm selects one, and
-// the timeline wraps modulo the alarm's display window.
-
 const (
-	// timelineRefreshFloor keeps image swaps above cast-load latency.
 	timelineRefreshFloor = 10 * time.Second
 )
 
 type TimelineStep struct {
 	Panel    display.Panel
-	Duration time.Duration // total time on screen per pass
-	Refresh  time.Duration // re-render / item-rotation cadence
+	Duration time.Duration
+	Refresh  time.Duration
 }
 
 type Timeline struct {
 	Steps []TimelineStep
 }
 
-// BoardSlot is what the timeline says to render at a moment.
 type BoardSlot struct {
 	Panel display.Panel
-	Step  int // index into the timeline's steps
-	Tick  int // refresh tick index within the current step
+	Step  int
+	Tick  int
 }
 
-// At reports the active step and tick for t, relative to the session
-// start. The timeline loops: slots wrap modulo the total duration.
 func (tl *Timeline) At(start, t time.Time) BoardSlot {
 	elapsed := t.Sub(start)
 
@@ -70,11 +59,9 @@ func (tl *Timeline) At(start, t time.Time) BoardSlot {
 		offset -= step.Duration
 	}
 
-	// Unreachable when steps are validated to sum positive.
 	return BoardSlot{Panel: tl.Steps[len(tl.Steps)-1].Panel}
 }
 
-// Total is the full cycle length of the timeline.
 func (tl *Timeline) Total() time.Duration {
 	var total time.Duration
 
@@ -85,8 +72,6 @@ func (tl *Timeline) Total() time.Duration {
 	return total
 }
 
-// Duration returns the active step's duration, alarm-session
-// relative, for the cast scheduler.
 func (tl *Timeline) Duration(slot BoardSlot) time.Duration {
 	if slot.Step < 0 || slot.Step >= len(tl.Steps) {
 		return 0
@@ -95,9 +80,6 @@ func (tl *Timeline) Duration(slot BoardSlot) time.Duration {
 	return tl.Steps[slot.Step].Duration
 }
 
-// NextBoundary returns when the slot after t begins: the next refresh
-// tick within a step, or the next step. The cast scheduler and the
-// preview tool both walk timelines with it.
 func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
 	total := tl.Total()
 	if total <= 0 {
@@ -176,8 +158,6 @@ func (tl *Timeline) validate() error {
 	return nil
 }
 
-// defaultViewSettings are the built-in per-view duration and refresh
-// used whenever the timeline file omits them.
 func defaultViewSettings(panel display.Panel) (duration time.Duration, refresh time.Duration) {
 	if panel == display.PanelBusProgress {
 		return 2 * time.Minute, 25 * time.Second
@@ -201,8 +181,6 @@ func panelForViewName(name string) (display.Panel, error) {
 	}
 }
 
-// TimelineCatalog is the parsed board-timeline.yml: view settings,
-// named presets, and the default order to play.
 type TimelineCatalog struct {
 	views   map[display.Panel]TimelineStep
 	presets map[string][]string
@@ -215,8 +193,6 @@ type timelineFile struct {
 	Presets map[string]yaml.Node `yaml:"presets"`
 }
 
-// LoadTimelineCatalog reads the timeline file; a missing file is not
-// an error, it means "fall back to the next resolution source".
 func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -269,8 +245,6 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 	return catalog, nil
 }
 
-// validateNames fails fast at load time on typos in the default order
-// or any preset, rather than when an alarm tries to use them.
 func (c *TimelineCatalog) validateNames() error {
 	if _, err := c.resolveNames(c.order); err != nil {
 		return fmt.Errorf("order: %w", err)
@@ -329,9 +303,7 @@ var builtinPresets = map[string][]string{
 	"bus-focus":   {"bus.map", "bus.schedule", "bus.progress", "weather"},
 }
 
-// decodeOrder accepts either a preset name or an explicit list.
 func (c *TimelineCatalog) decodeOrder(node *yaml.Node) ([]string, error) {
-	// Absent order decodes to a zero-valued node: use the default.
 	if node == nil || node.Kind == 0 {
 		return c.presets["default"], nil
 	}
@@ -399,10 +371,7 @@ type viewSettingsFile struct {
 	Refresh  string `yaml:"refresh"`
 }
 
-// loadViews accepts two shapes: a leaf view (weather: {duration: 1m})
-// or one nested level (bus: {map: {...}, progress: {...}}).
 func (c *TimelineCatalog) loadViews(views *yaml.Node) error {
-	// Absent sections decode to zero-valued nodes; nothing to apply.
 	if views == nil || views.Kind == 0 {
 		return nil
 	}
@@ -456,9 +425,6 @@ func (c *TimelineCatalog) loadViews(views *yaml.Node) error {
 	return nil
 }
 
-// isViewSettingsMapping reports whether a node looks like a view
-// settings block (only duration and/or refresh keys), as opposed to a
-// nesting of further view names.
 func isViewSettingsMapping(node *yaml.Node) bool {
 	if node.Kind != yaml.MappingNode {
 		return false
@@ -528,9 +494,6 @@ func (c *TimelineCatalog) applyViewSettings(name string, node *yaml.Node) error 
 	return nil
 }
 
-// Resolve builds the timeline for a per-alarm order: "" uses the
-// catalog's default order, a bare name selects a preset, and anything
-// else is a comma-separated view list.
 func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
 	var names []string
 
@@ -579,11 +542,6 @@ func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
 	return timeline, nil
 }
 
-// OpenBoardTimeline loads the board timeline configuration: the
-// yml catalog when present, otherwise the legacy BOARD_SCHEDULE
-// value, otherwise the built-in default. It returns the server's
-// default timeline plus the catalog (never nil) for per-alarm preset
-// resolution. Callers decide how hard to fail on err.
 func OpenBoardTimeline(
 	dataDir string,
 	legacySpec string,
@@ -604,8 +562,6 @@ func OpenBoardTimeline(
 		return timeline, catalog, nil
 	}
 
-	// No timeline file: fall back to the legacy schedule, but keep the
-	// built-in catalog available so per-alarm presets still resolve.
 	if strings.TrimSpace(legacySpec) != "" {
 		schedule, err := ParseBoardSchedule(legacySpec)
 		if err != nil {
@@ -622,8 +578,6 @@ func OpenBoardTimeline(
 	return timeline, catalog, err
 }
 
-// DefaultTimelineCatalog is the built-in fallback used when no
-// timeline file and no legacy schedule are configured.
 func DefaultTimelineCatalog() *TimelineCatalog {
 	catalog := &TimelineCatalog{
 		views:   defaultViews(),
@@ -639,9 +593,6 @@ func DefaultTimelineCatalog() *TimelineCatalog {
 	return catalog
 }
 
-// NewTimelineFromLegacySchedule converts a parsed BOARD_SCHEDULE
-// value into a timeline, preserving the legacy refresh behaviour of
-// one re-render per minute.
 func NewTimelineFromLegacySchedule(schedule BoardSchedule) *Timeline {
 	timeline := &Timeline{}
 
