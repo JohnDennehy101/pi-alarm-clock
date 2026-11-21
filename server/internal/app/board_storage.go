@@ -10,19 +10,23 @@ import (
 
 const boardSessionsMaxAge = 24 * time.Hour
 
-func saveBoardImage(sessionDir string, minute int, png []byte) error {
+// saveBoardImage writes a board frame atomically: the cast device
+// must never observe a half-written image.
+func saveBoardImage(sessionDir string, name string, png []byte) error {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		return fmt.Errorf("creating board session dir: %w", err)
 	}
 
-	name := fmt.Sprintf("minute-%02d.png", minute)
+	tmpPath := filepath.Join(sessionDir, name+".tmp")
 
-	if err := os.WriteFile(
-		filepath.Join(sessionDir, name),
-		png,
-		0o644,
-	); err != nil {
-		return fmt.Errorf("saving board minute %d: %w", minute, err)
+	if err := os.WriteFile(tmpPath, png, 0o644); err != nil {
+		return fmt.Errorf("saving board frame %s: %w", name, err)
+	}
+
+	if err := os.Rename(tmpPath, filepath.Join(sessionDir, name)); err != nil {
+		_ = os.Remove(tmpPath)
+
+		return fmt.Errorf("saving board frame %s: %w", name, err)
 	}
 
 	return nil

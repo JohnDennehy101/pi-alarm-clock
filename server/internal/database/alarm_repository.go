@@ -65,6 +65,7 @@ func (r *AlarmRepository) Create(
 			hue_colour_temperature,
 			chromecast_enabled, chromecast_device_id,
 			chromecast_display_offset, chromecast_display_duration,
+			board_timeline,
 			created_at, updated_at
 		)
 		VALUES (
@@ -79,7 +80,7 @@ func (r *AlarmRepository) Create(
 			?,
 			?, ?,
 			?, ?,
-			?, ?
+			?, ?, ?
 		)
 	`,
 		id,
@@ -110,6 +111,7 @@ func (r *AlarmRepository) Create(
 		a.Chromecast.DeviceID,
 		a.Chromecast.DisplayOffsetMinutes,
 		a.Chromecast.DisplayDurationMinutes,
+		a.Chromecast.BoardTimeline,
 		now.Format(time.RFC3339Nano),
 		now.Format(time.RFC3339Nano),
 	)
@@ -141,6 +143,7 @@ func (r *AlarmRepository) Get(
 			hue_colour_temperature,
 			chromecast_enabled, chromecast_device_id,
 			chromecast_display_offset, chromecast_display_duration,
+			board_timeline,
 			created_at, updated_at
 		FROM alarms
 		WHERE id = ?
@@ -173,6 +176,7 @@ func (r *AlarmRepository) List(
 			hue_colour_temperature,
 			chromecast_enabled, chromecast_device_id,
 			chromecast_display_offset, chromecast_display_duration,
+			board_timeline,
 			created_at, updated_at
 		FROM alarms
 		ORDER BY time ASC
@@ -256,6 +260,7 @@ func (r *AlarmRepository) Update(
 			chromecast_device_id = ?,
 			chromecast_display_offset = ?,
 			chromecast_display_duration = ?,
+			board_timeline = ?,
 			updated_at = ?
 		WHERE id = ?
 	`,
@@ -286,6 +291,7 @@ func (r *AlarmRepository) Update(
 		a.Chromecast.DeviceID,
 		a.Chromecast.DisplayOffsetMinutes,
 		a.Chromecast.DisplayDurationMinutes,
+		a.Chromecast.BoardTimeline,
 		now.Format(time.RFC3339Nano),
 		a.ID,
 	)
@@ -381,6 +387,7 @@ func scanAlarm(row rowScanner) (*alarm.Alarm, error) {
 		&a.Chromecast.DeviceID,
 		&a.Chromecast.DisplayOffsetMinutes,
 		&a.Chromecast.DisplayDurationMinutes,
+		&a.Chromecast.BoardTimeline,
 		&createdAt,
 		&updatedAt,
 	)

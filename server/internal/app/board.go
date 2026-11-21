@@ -207,15 +207,23 @@ type BoardService struct {
 
 	timetable *bus.Timetable
 	realtime  *BusRealtimeService
-	schedule  BoardSchedule
+	timeline  *Timeline
+	catalog   *TimelineCatalog
 }
 
 type BoardProvider interface {
-	BoardURL(
+	// ResolveTimeline maps a per-alarm order string (preset name or
+	// comma-separated view list) to a playable timeline.
+	ResolveTimeline(order string) (*Timeline, error)
+
+	// BoardURLForTimeline renders the frame due at renderTime for a
+	// specific timeline and returns its media URL.
+	BoardURLForTimeline(
 		ctx context.Context,
 		sessionStart time.Time,
 		renderTime time.Time,
 		stopNumber string,
+		timeline *Timeline,
 	) (string, error)
 }
 
@@ -223,14 +231,31 @@ func NewBoardService(
 	boardsRoot string,
 	timetable *bus.Timetable,
 	realtime *BusRealtimeService,
-	schedule BoardSchedule,
+	timeline *Timeline,
+	catalog *TimelineCatalog,
 ) *BoardService {
+	if timeline == nil {
+		timeline, _ = DefaultTimelineCatalog().Resolve("")
+	}
+
 	return &BoardService{
 		boardsRoot: boardsRoot,
 		timetable:  timetable,
 		realtime:   realtime,
-		schedule:   schedule,
+		timeline:   timeline,
+		catalog:    catalog,
 	}
+}
+
+// ResolveTimeline returns the timeline for a per-alarm order string:
+// empty keeps the server default, a name selects a preset, and a
+// comma-separated list is a one-off order.
+func (b *BoardService) ResolveTimeline(order string) (*Timeline, error) {
+	if strings.TrimSpace(order) == "" || b.catalog == nil {
+		return b.timeline, nil
+	}
+
+	return b.catalog.Resolve(order)
 }
 
 func (b *BoardService) setRenderer(renderer *display.BoardRenderer) {
@@ -270,6 +295,16 @@ func (b *BoardService) BoardURL(
 	renderTime time.Time,
 	stopNumber string,
 ) (string, error) {
+	return b.BoardURLForTimeline(ctx, sessionStart, renderTime, stopNumber, nil)
+}
+
+func (b *BoardService) BoardURLForTimeline(
+	ctx context.Context,
+	sessionStart time.Time,
+	renderTime time.Time,
+	stopNumber string,
+	timeline *Timeline,
+) (string, error) {
 	b.mu.Lock()
 	renderer := b.renderer
 	baseURL := b.baseURL
@@ -284,19 +319,23 @@ func (b *BoardService) BoardURL(
 		return "", fmt.Errorf("board URL is not configured")
 	}
 
-	renderTime = renderTime.Truncate(time.Minute)
+	if timeline == nil {
+		timeline = b.timeline
+	}
+
+	renderTime = renderTime.Truncate(time.Second)
 	sessionStart = sessionStart.Truncate(time.Minute)
 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
-	minute := int(renderTime.Sub(sessionStart) / time.Minute)
-	if minute < 0 {
+	if renderTime.Before(sessionStart) {
 		return "", fmt.Errorf("render time is before board session start")
 	}
 
-	panel := b.schedule.PanelAt(minute)
+	slot := timeline.At(sessionStart, renderTime)
+	panel := slot.Panel
 
 	view := display.BoardView{Panel: panel}
 
@@ -318,7 +357,7 @@ func (b *BoardService) BoardURL(
 		view.Map = mapBoard
 
 	case display.PanelBusProgress:
-		progress, err := b.loadBusProgress(stopNumber, renderTime, minute)
+		progress, err := b.loadBusProgress(stopNumber, renderTime, slot.Tick)
 		if err != nil {
 			return "", fmt.Errorf("loading bus progress: %w", err)
 		}
@@ -334,13 +373,13 @@ func (b *BoardService) BoardURL(
 	session := sessionStart.Format("20060102T1504")
 	sessionDir := filepath.Join(boardsRoot, session)
 
-	if err := saveBoardImage(sessionDir, minute, image); err != nil {
+	name := fmt.Sprintf("frame-%d.png", renderTime.Unix())
+
+	if err := saveBoardImage(sessionDir, name, image); err != nil {
 		return "", err
 	}
 
 	pruneOldSessions(boardsRoot)
-
-	name := fmt.Sprintf("minute-%02d.png", minute)
 
 	return fmt.Sprintf("%s/%s/%s", baseURL, session, name), nil
 }
@@ -365,7 +404,7 @@ func (b *BoardService) approachingTrips(
 func (b *BoardService) loadBusProgress(
 	stopNumber string,
 	renderTime time.Time,
-	minute int,
+	tick int,
 ) (*display.BusProgress, error) {
 	trips, err := b.approachingTrips(
 		stopNumber,
@@ -380,7 +419,7 @@ func (b *BoardService) loadBusProgress(
 		return &display.BusProgress{StopNumber: stopNumber}, nil
 	}
 
-	trip := trips[minute%len(trips)]
+	trip := trips[tick%len(trips)]
 
 	return &display.BusProgress{
 		Route:            trip.Route,

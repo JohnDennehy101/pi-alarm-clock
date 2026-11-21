@@ -72,6 +72,7 @@ func (e *AlarmExecutor) StartBoardDisplay(
 			a.Chromecast.DeviceID,
 			a.Chromecast.DisplayDurationMinutes,
 			"",
+			a.Chromecast.BoardTimeline,
 		); err != nil {
 			log.Printf(
 				"alarm %s: displaying Chromecast board failed: %v",

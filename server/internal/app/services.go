@@ -40,14 +40,17 @@ func NewServices(
 	boardScheduleSpec string,
 	basemapProvider display.BasemapProvider,
 ) (*Services, error) {
-	boardSchedule, err := ParseBoardSchedule(boardScheduleSpec)
-	if err != nil {
-		return nil, fmt.Errorf("parsing board schedule: %w", err)
-	}
-
 	var realtimeClient *bus.RealtimeClient
 	if busRealtimeAPIKey != "" {
 		realtimeClient = bus.NewRealtimeClient(busRealtimeURL, busRealtimeAPIKey)
+	}
+
+	boardTimeline, boardCatalog, err := OpenBoardTimeline(dataDir, boardScheduleSpec)
+	if err != nil {
+		log.Printf("Board timeline config invalid, using built-in default: %v", err)
+
+		boardTimeline = nil
+		boardCatalog = nil
 	}
 
 	services := &Services{
@@ -58,7 +61,8 @@ func NewServices(
 			filepath.Join(dataDir, "boards"),
 			timetable,
 			NewBusRealtimeService(realtimeClient),
-			boardSchedule,
+			boardTimeline,
+			boardCatalog,
 		),
 		Weather: NewWeatherService(weatherLatitude, weatherLongitude),
 		Alarm:   NewAlarmService(alarmRepository),

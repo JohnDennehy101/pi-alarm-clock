@@ -288,5 +288,16 @@ func validateChromecast(settings alarm.ChromecastSettings) error {
 		)
 	}
 
+	// The order string is only shape-checked here: it is resolved
+	// against the board timeline catalog when the alarm fires, so
+	// presets can change without editing alarms.
+	if len(settings.BoardTimeline) > 200 {
+		return fmt.Errorf("Chromecast board timeline is too long")
+	}
+
+	if strings.ContainsAny(settings.BoardTimeline, "\n\r") {
+		return fmt.Errorf("Chromecast board timeline must be a single value")
+	}
+
 	return nil
 }

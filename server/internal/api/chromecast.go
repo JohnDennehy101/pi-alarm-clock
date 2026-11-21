@@ -60,6 +60,7 @@ func (a *API) displayChromecastBoard(w http.ResponseWriter, r *http.Request) {
 		DeviceID      string `json:"deviceId,omitempty"`
 		WindowMinutes int    `json:"windowMinutes,omitempty"`
 		StopNumber    string `json:"stopNumber,omitempty"`
+		BoardTimeline string `json:"boardTimeline,omitempty"`
 	}
 
 	if err := decodeJSON(w, r, &request); err != nil {
@@ -89,6 +90,7 @@ func (a *API) displayChromecastBoard(w http.ResponseWriter, r *http.Request) {
 		deviceID,
 		request.WindowMinutes,
 		strings.TrimSpace(request.StopNumber),
+		strings.TrimSpace(request.BoardTimeline),
 	); err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
