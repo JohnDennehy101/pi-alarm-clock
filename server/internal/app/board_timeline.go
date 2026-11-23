@@ -22,6 +22,118 @@ type TimelineStep struct {
 	Refresh  time.Duration
 }
 
+// viewEntry is one view reference in an order, intro or preset list. The
+// optional duration and refresh override the per-view defaults from views:.
+type viewEntry struct {
+	Name     string
+	Duration *time.Duration
+	Refresh  *time.Duration
+}
+
+func (e viewEntry) HasOverrides() bool {
+	return e.Duration != nil || e.Refresh != nil
+}
+
+// canonical resolves the entry's name to its canonical view name, keeping
+// any duration/refresh overrides.
+func (e viewEntry) Canonical() (viewEntry, error) {
+	panel, err := panelForViewName(e.Name)
+	if err != nil {
+		return viewEntry{}, err
+	}
+
+	return viewEntry{
+		Name:     canonicalViewName(panel),
+		Duration: e.Duration,
+		Refresh:  e.Refresh,
+	}, nil
+}
+
+// String renders the single-line expression form used by the alarm
+// board_timeline/board_intro columns: view[:duration[:refresh]].
+func (e viewEntry) String() string {
+	rendered := e.Name
+
+	if e.Duration != nil {
+		rendered += ":" + durationString(*e.Duration)
+	}
+
+	if e.Refresh != nil {
+		rendered += ":" + durationString(*e.Refresh)
+	}
+
+	return rendered
+}
+
+// parseViewExpression parses a single-line view reference of the form
+// view[:duration[:refresh]], e.g. "bus.map:30s:10s".
+func parseViewExpression(value string) (viewEntry, error) {
+	trimmed := strings.TrimSpace(value)
+	parts := strings.Split(trimmed, ":")
+
+	if len(parts) > 3 {
+		return viewEntry{}, fmt.Errorf(
+			"invalid view expression %q: expected view[:duration[:refresh]]",
+			value,
+		)
+	}
+
+	entry := viewEntry{Name: strings.TrimSpace(parts[0])}
+
+	if entry.Name == "" {
+		return viewEntry{}, fmt.Errorf("invalid view expression %q: view name is empty", value)
+	}
+
+	if len(parts) >= 2 {
+		duration, err := parseEntryDuration(entry.Name, "duration", parts[1])
+		if err != nil {
+			return viewEntry{}, err
+		}
+
+		entry.Duration = &duration
+	}
+
+	if len(parts) == 3 {
+		refresh, err := parseEntryDuration(entry.Name, "refresh", parts[2])
+		if err != nil {
+			return viewEntry{}, err
+		}
+
+		entry.Refresh = &refresh
+	}
+
+	return entry, nil
+}
+
+func parseEntryDuration(name, field string, value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
+
+	if trimmed == "" {
+		return 0, fmt.Errorf("view %s: missing %s", name, field)
+	}
+
+	parsed, err := time.ParseDuration(trimmed)
+	if err != nil || parsed < time.Second {
+		return 0, fmt.Errorf(
+			"view %s: invalid %s %q (expected 1s or more, e.g. 30s, 2m)",
+			name,
+			field,
+			value,
+		)
+	}
+
+	if field == "refresh" && parsed < timelineRefreshFloor {
+		return 0, fmt.Errorf(
+			"view %s: invalid refresh %q (minimum %s)",
+			name,
+			value,
+			timelineRefreshFloor,
+		)
+	}
+
+	return parsed, nil
+}
+
 type Timeline struct {
 	Intro []TimelineStep
 	Steps []TimelineStep
@@ -260,9 +372,9 @@ func panelForViewName(name string) (display.Panel, error) {
 
 type TimelineCatalog struct {
 	views   map[display.Panel]TimelineStep
-	presets map[string][]string
-	order   []string
-	intro   []string
+	presets map[string][]viewEntry
+	order   []viewEntry
+	intro   []viewEntry
 }
 
 type timelineFile struct {
@@ -290,11 +402,11 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 
 	catalog := &TimelineCatalog{
 		views:   defaultViews(),
-		presets: map[string][]string{},
+		presets: map[string][]viewEntry{},
 	}
 
 	for name, entries := range builtinPresets {
-		catalog.presets[name] = append([]string(nil), entries...)
+		catalog.presets[name] = entriesForNames(entries)
 	}
 
 	if err := catalog.loadViews(&file.Views); err != nil {
@@ -332,11 +444,11 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 }
 
 func (c *TimelineCatalog) validateNames() error {
-	if _, err := c.resolveNames(c.order); err != nil {
+	if err := c.validateEntries(c.order); err != nil {
 		return fmt.Errorf("order: %w", err)
 	}
 
-	if _, err := c.resolveNames(c.intro); err != nil {
+	if err := c.validateEntries(c.intro); err != nil {
 		return fmt.Errorf("intro: %w", err)
 	}
 
@@ -347,7 +459,7 @@ func (c *TimelineCatalog) validateNames() error {
 	sort.Strings(names)
 
 	for _, name := range names {
-		if _, err := c.resolveNames(c.presets[name]); err != nil {
+		if err := c.validateEntries(c.presets[name]); err != nil {
 			return fmt.Errorf("preset %q: %w", name, err)
 		}
 	}
@@ -355,19 +467,34 @@ func (c *TimelineCatalog) validateNames() error {
 	return nil
 }
 
-func (c *TimelineCatalog) resolveNames(viewNames []string) ([]display.Panel, error) {
-	panels := make([]display.Panel, 0, len(viewNames))
-
-	for _, name := range viewNames {
-		panel, err := panelForViewName(name)
-		if err != nil {
-			return nil, err
+func (c *TimelineCatalog) validateEntries(entries []viewEntry) error {
+	for _, entry := range entries {
+		if err := c.validateEntrySettings(entry); err != nil {
+			return err
 		}
 
-		panels = append(panels, panel)
+		if _, err := panelForViewName(entry.Name); err != nil {
+			return err
+		}
 	}
 
-	return panels, nil
+	return nil
+}
+
+func (c *TimelineCatalog) validateEntrySettings(entry viewEntry) error {
+	if entry.Duration != nil && *entry.Duration < time.Second {
+		return fmt.Errorf("view %s: duration is below 1s", entry.Name)
+	}
+
+	if entry.Refresh != nil && *entry.Refresh < timelineRefreshFloor {
+		return fmt.Errorf(
+			"view %s: refresh is below %s",
+			entry.Name,
+			timelineRefreshFloor,
+		)
+	}
+
+	return nil
 }
 
 func defaultViews() map[display.Panel]TimelineStep {
@@ -393,7 +520,17 @@ var builtinPresets = map[string][]string{
 	"bus-focus":   {"bus.map", "bus.schedule", "bus.progress", "weather"},
 }
 
-func (c *TimelineCatalog) decodeOrder(node *yaml.Node) ([]string, error) {
+func entriesForNames(names []string) []viewEntry {
+	entries := make([]viewEntry, 0, len(names))
+
+	for _, name := range names {
+		entries = append(entries, viewEntry{Name: name})
+	}
+
+	return entries
+}
+
+func (c *TimelineCatalog) decodeOrder(node *yaml.Node) ([]viewEntry, error) {
 	if node == nil || node.Kind == 0 {
 		return c.presets["default"], nil
 	}
@@ -420,7 +557,7 @@ func (c *TimelineCatalog) decodeOrder(node *yaml.Node) ([]string, error) {
 	return decodeViewList(node)
 }
 
-func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]string, error) {
+func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]viewEntry, error) {
 	if node == nil || node.Kind == 0 {
 		return nil, nil
 	}
@@ -435,7 +572,7 @@ func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]string, error) {
 			return nil, fmt.Errorf("intro: %w", err)
 		}
 
-		return append([]string(nil), preset...), nil
+		return append([]viewEntry(nil), preset...), nil
 	}
 
 	if node.Kind == yaml.SequenceNode && len(node.Content) == 0 {
@@ -450,7 +587,7 @@ func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]string, error) {
 	return views, nil
 }
 
-func (c *TimelineCatalog) preset(name string) ([]string, error) {
+func (c *TimelineCatalog) preset(name string) ([]viewEntry, error) {
 	if entries, ok := c.presets[name]; ok {
 		return entries, nil
 	}
@@ -468,22 +605,151 @@ func (c *TimelineCatalog) preset(name string) ([]string, error) {
 	)
 }
 
-func decodeViewList(node *yaml.Node) ([]string, error) {
+// decodeViewList decodes a sequence of view entries. Each entry may be:
+//   - a plain view name: "weather" or "bus.map" (legacy dot form)
+//   - a grouped name mapping: "bus: schedule"
+//   - a view with duration/refresh overrides: "weather: {duration: 30s}"
+//   - a grouped view with overrides:
+//     "bus: schedule: {duration: 2m, refresh: 15s}"
+func decodeViewList(node *yaml.Node) ([]viewEntry, error) {
 	if node.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("expected a list of view names")
+		return nil, fmt.Errorf("expected a list of view entries")
 	}
 
-	var views []string
+	entries := make([]viewEntry, 0, len(node.Content))
 
-	if err := node.Decode(&views); err != nil {
-		return nil, fmt.Errorf("parsing view list: %w", err)
+	for i, item := range node.Content {
+		entry, err := decodeViewEntryNode(item)
+		if err != nil {
+			return nil, fmt.Errorf("view %d: %w", i+1, err)
+		}
+
+		entries = append(entries, entry)
 	}
 
-	if len(views) == 0 {
+	if len(entries) == 0 {
 		return nil, fmt.Errorf("view list is empty")
 	}
 
-	return views, nil
+	return entries, nil
+}
+
+func decodeViewEntryNode(item *yaml.Node) (viewEntry, error) {
+	switch item.Kind {
+	case yaml.ScalarNode:
+		if item.Tag == "!!null" {
+			return viewEntry{}, fmt.Errorf("expected a view name")
+		}
+
+		name := strings.TrimSpace(item.Value)
+		if name == "" {
+			return viewEntry{}, fmt.Errorf("expected a view name")
+		}
+
+		return viewEntry{Name: name}, nil
+	case yaml.MappingNode:
+		return decodeViewEntryMapping(item)
+	default:
+		return viewEntry{}, fmt.Errorf("expected a view name, a view with duration/refresh settings, or a group: view entry")
+	}
+}
+
+func decodeViewEntryMapping(item *yaml.Node) (viewEntry, error) {
+	if len(item.Content) != 2 {
+		return viewEntry{}, fmt.Errorf("expected a single view entry, got %d", len(item.Content)/2)
+	}
+
+	name := strings.TrimSpace(item.Content[0].Value)
+	value := item.Content[1]
+
+	if name == "" {
+		return viewEntry{}, fmt.Errorf("view name is empty")
+	}
+
+	switch value.Kind {
+	case yaml.ScalarNode:
+		if value.Tag == "!!null" || strings.TrimSpace(value.Value) == "" {
+			return viewEntry{}, fmt.Errorf("view %q: expected a view name", name)
+		}
+
+		// Grouped name: "bus: schedule" resolves to "bus.schedule".
+		return viewEntry{Name: name + "." + strings.TrimSpace(value.Value)}, nil
+	case yaml.MappingNode:
+		if isViewSettingsMapping(value) {
+			// View with overrides: "weather: {duration: 30s, refresh: 10s}".
+			return viewEntryFromSettings(name, value)
+		}
+
+		// Grouped view with overrides: "bus: schedule: {duration: 2m}".
+		if len(value.Content) != 2 {
+			return viewEntry{}, fmt.Errorf(
+				"view %q: expected a single entry, got %d",
+				name,
+				len(value.Content)/2,
+			)
+		}
+
+		viewName := strings.TrimSpace(value.Content[0].Value)
+		settings := value.Content[1]
+
+		if settings.Kind != yaml.MappingNode || !isViewSettingsMapping(settings) {
+			return viewEntry{}, fmt.Errorf(
+				"view %s.%s: expected duration/refresh settings",
+				name,
+				viewName,
+			)
+		}
+
+		return viewEntryFromSettings(name+"."+viewName, settings)
+	default:
+		return viewEntry{}, fmt.Errorf(
+			"view %q: expected a view name, group view, or duration/refresh settings",
+			name,
+		)
+	}
+}
+
+func viewEntryFromSettings(name string, node *yaml.Node) (viewEntry, error) {
+	entry := viewEntry{Name: name}
+
+	for i := 0; i < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		value := strings.TrimSpace(node.Content[i+1].Value)
+
+		switch key {
+		case "duration":
+			if value == "" {
+				return viewEntry{}, fmt.Errorf("view %s: missing duration", name)
+			}
+
+			duration, err := parseEntryDuration(name, "duration", value)
+			if err != nil {
+				return viewEntry{}, err
+			}
+
+			entry.Duration = &duration
+		case "refresh":
+			if value == "" {
+				return viewEntry{}, fmt.Errorf("view %s: missing refresh", name)
+			}
+
+			refresh, err := parseEntryDuration(name, "refresh", value)
+			if err != nil {
+				return viewEntry{}, err
+			}
+
+			entry.Refresh = &refresh
+		}
+	}
+
+	if !entry.HasOverrides() {
+		return viewEntry{}, fmt.Errorf(
+			"view %q: expected duration and/or refresh settings",
+			name,
+		)
+	}
+
+	return entry, nil
 }
 
 type viewSettingsFile struct {
@@ -614,11 +880,11 @@ func (c *TimelineCatalog) applyViewSettings(name string, node *yaml.Node) error 
 	return nil
 }
 
-func (c *TimelineCatalog) stepsForNames(names []string) ([]TimelineStep, error) {
-	steps := make([]TimelineStep, 0, len(names))
+func (c *TimelineCatalog) stepsForEntries(entries []viewEntry) ([]TimelineStep, error) {
+	steps := make([]TimelineStep, 0, len(entries))
 
-	for _, name := range names {
-		panel, err := panelForViewName(name)
+	for _, entry := range entries {
+		panel, err := panelForViewName(entry.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -628,6 +894,14 @@ func (c *TimelineCatalog) stepsForNames(names []string) ([]TimelineStep, error) 
 			duration, refresh := defaultViewSettings(panel)
 
 			settings = TimelineStep{Duration: duration, Refresh: refresh}
+		}
+
+		if entry.Duration != nil {
+			settings.Duration = *entry.Duration
+		}
+
+		if entry.Refresh != nil {
+			settings.Refresh = *entry.Refresh
 		}
 
 		steps = append(steps, TimelineStep{
@@ -640,45 +914,75 @@ func (c *TimelineCatalog) stepsForNames(names []string) ([]TimelineStep, error) 
 	return steps, nil
 }
 
-func (c *TimelineCatalog) orderNames(order string) ([]string, error) {
+// orderEntries resolves a single-line order expression (from the alarm
+// board_timeline column or the API) into view entries. A single word that
+// names a preset expands to that preset; otherwise the expression is a
+// comma-separated list of view[:duration[:refresh]] references.
+func (c *TimelineCatalog) orderEntries(order string) ([]viewEntry, error) {
 	trimmed := strings.TrimSpace(order)
 
 	switch {
 	case trimmed == "":
 		return c.order, nil
-	case !strings.ContainsAny(trimmed, ",."):
-		return c.preset(trimmed)
-	default:
-		return strings.Split(trimmed, ","), nil
-	}
-}
-
-func (c *TimelineCatalog) introFromExpression(expr string) ([]string, error) {
-	trimmed := strings.TrimSpace(expr)
-	if trimmed == "" {
-		return nil, nil
-	}
-
-	if !strings.Contains(trimmed, ",") {
+	case !strings.ContainsAny(trimmed, ",:"):
 		if entries, ok := c.presets[trimmed]; ok {
-			return append([]string(nil), entries...), nil
+			return append([]viewEntry(nil), entries...), nil
 		}
-	}
 
-	return normalizeViewList(strings.Split(trimmed, ","))
+		return []viewEntry{{Name: trimmed}}, nil
+	default:
+		return parseEntryList(trimmed)
+	}
 }
 
-func (c *TimelineCatalog) build(orderNames, introNames []string) (*Timeline, error) {
+func parseEntryList(expr string) ([]viewEntry, error) {
+	parts := strings.Split(expr, ",")
+	entries := make([]viewEntry, 0, len(parts))
+
+	for _, part := range parts {
+		entry, err := parseViewExpression(part)
+		if err != nil {
+			return nil, err
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("view list is empty")
+	}
+
+	return entries, nil
+}
+
+func (c *TimelineCatalog) introFromExpression(expr string) ([]viewEntry, error) {
+	trimmed := strings.TrimSpace(expr)
+
+	switch {
+	case trimmed == "":
+		return nil, nil
+	case !strings.ContainsAny(trimmed, ",:"):
+		if entries, ok := c.presets[trimmed]; ok {
+			return append([]viewEntry(nil), entries...), nil
+		}
+
+		return []viewEntry{{Name: trimmed}}, nil
+	default:
+		return parseEntryList(trimmed)
+	}
+}
+
+func (c *TimelineCatalog) build(orderEntries, introEntries []viewEntry) (*Timeline, error) {
 	timeline := &Timeline{}
 
-	introSteps, err := c.stepsForNames(introNames)
+	introSteps, err := c.stepsForEntries(introEntries)
 	if err != nil {
 		return nil, fmt.Errorf("intro: %w", err)
 	}
 
 	timeline.Intro = introSteps
 
-	loopSteps, err := c.stepsForNames(orderNames)
+	loopSteps, err := c.stepsForEntries(orderEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -693,26 +997,26 @@ func (c *TimelineCatalog) build(orderNames, introNames []string) (*Timeline, err
 }
 
 func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
-	names, err := c.orderNames(order)
+	entries, err := c.orderEntries(order)
 	if err != nil {
 		return nil, err
 	}
 
-	return c.build(names, c.intro)
+	return c.build(entries, c.intro)
 }
 
 func (c *TimelineCatalog) ResolveForCast(order, intro string) (*Timeline, error) {
-	names, err := c.orderNames(order)
+	entries, err := c.orderEntries(order)
 	if err != nil {
 		return nil, err
 	}
 
-	introNames, err := c.introFromExpression(intro)
+	introEntries, err := c.introFromExpression(intro)
 	if err != nil {
 		return nil, fmt.Errorf("board intro %q: %w", intro, err)
 	}
 
-	return c.build(names, introNames)
+	return c.build(entries, introEntries)
 }
 
 func OpenBoardTimeline(
@@ -754,11 +1058,11 @@ func OpenBoardTimeline(
 func DefaultTimelineCatalog() *TimelineCatalog {
 	catalog := &TimelineCatalog{
 		views:   defaultViews(),
-		presets: map[string][]string{},
+		presets: map[string][]viewEntry{},
 	}
 
 	for name, entries := range builtinPresets {
-		catalog.presets[name] = append([]string(nil), entries...)
+		catalog.presets[name] = entriesForNames(entries)
 	}
 
 	catalog.order = catalog.presets["default"]

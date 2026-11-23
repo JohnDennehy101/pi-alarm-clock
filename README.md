@@ -76,14 +76,35 @@ views:
       refresh: 25s      # rotate to the next approaching bus
 
 order: interleaved      # preset name, or a list:
-# order: [weather, bus.map, bus.schedule, bus.progress]
+# order:
+#   - weather
+#   - bus: schedule
 
-intro: [weather]       # one-shot intro before the loop (preview /
-                       # default-timeline renders; optional)
+intro:
+  - weather             # one-shot intro before the loop (preview /
+                        # default-timeline renders; optional)
 
 presets:                # user-defined order presets
-  morning: [bus.map, weather, bus.map, bus.progress, weather]
+  morning:
+    - bus: map
+    - weather
 ```
+
+Order, intro and preset entries may each carry their own duration and
+refresh, overriding `views:` for that entry only:
+
+```yaml
+order:
+  - weather
+  - bus: schedule
+  - bus:
+      map:
+        duration: 45s    # shorter map stint, refresh falls back to views
+        refresh: 15s
+```
+
+(The dotted form `bus.map` is still accepted in files and expressions,
+but the grouped form is what the server writes back.)
 
 Built-in presets: `default`, `interleaved` (weather woven between bus
 views), `bus-focus`. User presets override views on the same name.
@@ -102,11 +123,13 @@ command).
 Per-alarm selection is part of each alarm's Chromecast settings:
 `boardTimeline` selects the loop (empty uses the global default order,
 a preset name selects that preset, and a comma-separated view list is a
-one-off order), and `boardIntro` opts this alarm in to playing an
-intro first (empty means no intro; same expression forms). Invalid
-expressions fall back — a bad intro is dropped, a bad order falls back
-to the default at fire time (logged) — so the alarm still shows a
-board.
+one-off order) and supports the compact per-entry form
+`weather:2m,bus.map:30s:10s` (view[:duration[:refresh]]), so a single
+alarm can pin its own cadence without touching the YAML. `boardIntro`
+opts this alarm in to playing an intro first (empty means no intro;
+same expression forms). Invalid expressions fall back — a bad intro
+is dropped, a bad order falls back to the default at fire time
+(logged) — so the alarm still shows a board.
 
 When no `board-timeline.yml` exists, the legacy `BOARD_SCHEDULE` env
 (with the nested `bus:{...}` group syntax) still configures the

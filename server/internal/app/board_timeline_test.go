@@ -751,7 +751,7 @@ func TestTimelineCatalogIntroDecode(t *testing.T) {
 		}
 
 		for i := range test.wantIntro {
-			if catalog.intro[i] != test.wantIntro[i] {
+			if catalog.intro[i].Name != test.wantIntro[i] {
 				t.Errorf("%s: intro[%d] = %s, want %s", test.name, i, catalog.intro[i], test.wantIntro[i])
 			}
 		}
@@ -769,7 +769,7 @@ func TestTimelineCatalogIntroDecode(t *testing.T) {
 
 func TestTimelineCatalogResolveForCast(t *testing.T) {
 	catalog := DefaultTimelineCatalog()
-	catalog.intro = []string{"weather"} // global intro must NOT leak into casts
+	catalog.intro = entriesForNames([]string{"weather"}) // global intro must NOT leak into casts
 
 	introPanels := func(tl *Timeline) []display.Panel {
 		panels := make([]display.Panel, 0, len(tl.Intro))
@@ -865,8 +865,8 @@ func TestTimelineCatalogResolveForCast(t *testing.T) {
 
 func TestBoardServiceResolveTimelineForCast(t *testing.T) {
 	catalog := DefaultTimelineCatalog()
-	catalog.intro = []string{"weather"}
-	catalog.order = []string{"bus.schedule", "bus.map", "bus.progress"}
+	catalog.intro = entriesForNames([]string{"weather"})
+	catalog.order = entriesForNames([]string{"bus.schedule", "bus.map", "bus.progress"})
 
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
 
@@ -938,5 +938,168 @@ func TestBoardServiceResolveTimelineForCast(t *testing.T) {
 
 	if len(timeline.Intro) != 1 || timeline.Intro[0].Panel != display.PanelWeather {
 		t.Fatalf("default resolve intro = %+v", timeline.Intro)
+	}
+}
+
+func TestTimelineCatalogGroupedEntriesAndOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board-timeline.yml")
+
+	file := `
+views:
+  weather:
+    duration: 2m
+    refresh: 1m
+
+order:
+  - weather
+  - bus: schedule
+  - weather:
+      duration: 30s
+      refresh: 10s
+  - bus:
+      map:
+        duration: 45s
+        refresh: 15s
+
+presets:
+  morning-commute:
+    - bus:
+        schedule:
+          duration: 3m
+    - bus: map
+`
+
+	if err := os.WriteFile(path, []byte(file), 0o644); err != nil {
+		t.Fatalf("write timeline file: %v", err)
+	}
+
+	catalog, err := LoadTimelineCatalog(path)
+	if err != nil {
+		t.Fatalf("LoadTimelineCatalog: %v", err)
+	}
+
+	timeline, err := catalog.Resolve("")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	want := []struct {
+		panel    display.Panel
+		duration time.Duration
+		refresh  time.Duration
+	}{
+		{display.PanelWeather, 2 * time.Minute, time.Minute},
+		{display.PanelBus, 2 * time.Minute, time.Minute},
+		{display.PanelWeather, 30 * time.Second, 10 * time.Second},
+		{display.PanelBusMap, 45 * time.Second, 15 * time.Second},
+	}
+
+	if len(timeline.Steps) != len(want) {
+		t.Fatalf("Resolve produced %d steps, want %d: %+v", len(timeline.Steps), len(want), timeline.Steps)
+	}
+
+	for i, step := range timeline.Steps {
+		if step.Panel != want[i].panel ||
+			step.Duration != want[i].duration ||
+			step.Refresh != want[i].refresh {
+			t.Errorf("step %d = %+v, want %+v", i, step, want[i])
+		}
+	}
+
+	// Per-preset duration overrides apply when an alarm references the preset.
+	presetTimeline, err := catalog.Resolve("morning-commute")
+	if err != nil {
+		t.Fatalf("Resolve(morning-commute): %v", err)
+	}
+
+	if len(presetTimeline.Steps) != 2 {
+		t.Fatalf("preset timeline = %+v", presetTimeline.Steps)
+	}
+
+	if presetTimeline.Steps[0].Panel != display.PanelBus ||
+		presetTimeline.Steps[0].Duration != 3*time.Minute {
+		t.Errorf("preset schedule step = %+v, want 3m", presetTimeline.Steps[0])
+	}
+
+	if presetTimeline.Steps[1].Panel != display.PanelBusMap {
+		t.Errorf("preset map step = %+v", presetTimeline.Steps[1])
+	}
+}
+
+func TestTimelineCatalogEntryExpressionOverrides(t *testing.T) {
+	catalog := DefaultTimelineCatalog()
+
+	timeline, err := catalog.ResolveForCast("weather:2m:30s,bus.map:45s:15s,weather:3m", "")
+	if err != nil {
+		t.Fatalf("ResolveForCast: %v", err)
+	}
+
+	if len(timeline.Steps) != 3 {
+		t.Fatalf("timeline = %+v", timeline.Steps)
+	}
+
+	if timeline.Steps[0].Duration != 2*time.Minute || timeline.Steps[0].Refresh != 30*time.Second {
+		t.Errorf("weather step = %+v, want 2m/30s", timeline.Steps[0])
+	}
+
+	if timeline.Steps[1].Panel != display.PanelBusMap ||
+		timeline.Steps[1].Duration != 45*time.Second ||
+		timeline.Steps[1].Refresh != 15*time.Second {
+		t.Errorf("bus.map step = %+v, want 45s/15s", timeline.Steps[1])
+	}
+
+	// Duration-only override: refresh falls back to the per-view default.
+	if timeline.Steps[2].Duration != 3*time.Minute || timeline.Steps[2].Refresh != time.Minute {
+		t.Errorf("weather(3m) step = %+v, want 3m/1m", timeline.Steps[2])
+	}
+
+	// A single word that names a preset still expands to that preset.
+	presetTimeline, err := catalog.ResolveForCast("bus-focus", "")
+	if err != nil || len(presetTimeline.Steps) != 4 {
+		t.Fatalf("ResolveForCast(bus-focus): %v, steps = %+v", err, presetTimeline.Steps)
+	}
+
+	// A single plain view name (not a preset) resolves to a one-view order.
+	single, err := catalog.ResolveForCast("weather", "")
+	if err != nil || len(single.Steps) != 1 || single.Steps[0].Panel != display.PanelWeather {
+		t.Fatalf("ResolveForCast(weather): %v, steps = %+v", err, single.Steps)
+	}
+
+	bad := []string{
+		"weather:0s",
+		"weather:2m:5s",
+		"weather:2m:30s:12m",
+		"mup:2m",
+		"weather:abc",
+		"weather:1s:0s",
+	}
+
+	for _, expr := range bad {
+		if _, err := catalog.ResolveForCast(expr, ""); err == nil {
+			t.Errorf("ResolveForCast(%q) = nil error, want error", expr)
+		}
+	}
+}
+
+func TestTimelineCatalogIntroExpressionOverrides(t *testing.T) {
+	catalog := DefaultTimelineCatalog()
+
+	timeline, err := catalog.ResolveForCast("bus.map", "weather:30s:10s,bus.progress")
+	if err != nil {
+		t.Fatalf("ResolveForCast: %v", err)
+	}
+
+	if len(timeline.Intro) != 2 {
+		t.Fatalf("intro = %+v", timeline.Intro)
+	}
+
+	if timeline.Intro[0].Panel != display.PanelWeather ||
+		timeline.Intro[0].Duration != 30*time.Second ||
+		timeline.Intro[0].Refresh != 10*time.Second {
+		t.Errorf("intro weather step = %+v, want 30s/10s", timeline.Intro[0])
+	}
+
+	if timeline.Intro[1].Panel != display.PanelBusProgress {
+		t.Errorf("intro progress step = %+v", timeline.Intro[1])
 	}
 }

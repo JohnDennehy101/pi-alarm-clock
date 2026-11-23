@@ -45,9 +45,8 @@ setting: `"boardTimeline": "morning"`.
 
 - `internal/app/board_timeline.go`: `clone()`, `setViewSettings`,
   `putPreset`, `deletePreset`, `setOrder`, plus `serializeCatalog` producing
-  canonical yml (flat dotted keys — `bus.map: {duration: 3m}` — which the
-  existing loader already accepts, so write and read are a verified
-  round-trip).
+  canonical yml (grouped keys — `bus: {map: {duration: 3m}}` — which the
+  loader accepts, so write and read are a verified round-trip).
 - `BoardService` gains settings methods on top of `ResolveTimeline`: each
   does validate → clone → mutate → write file (tmp + rename) → atomically
   swap the `b.catalog` pointer. No server restart; the next cast or alarm
@@ -78,9 +77,6 @@ plus 400/404/409.
 
 ## Out of scope
 
-- Per-alarm view settings (durations embedded in the alarm's
-  `boardTimeline` string) — durations/refresh are global per view today;
-  presets and one-off orders are the per-alarm knobs.
 - Transition animations (fades etc.) — "transition" here is the refresh
   cadence.
 - Flutter frontend.

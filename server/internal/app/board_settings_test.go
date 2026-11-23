@@ -234,9 +234,9 @@ func TestSerializeCatalogRoundTrip(t *testing.T) {
 		Refresh:  45 * time.Second,
 	}
 
-	catalog.presets["commute"] = []string{"weather", "bus.map", "bus.progress"}
-	catalog.order = []string{"weather", "bus.progress"}
-	catalog.intro = []string{"weather"}
+	catalog.presets["commute"] = entriesForNames([]string{"weather", "bus.map", "bus.progress"})
+	catalog.order = entriesForNames([]string{"weather", "bus.progress"})
+	catalog.intro = entriesForNames([]string{"weather"})
 
 	data, err := serializeCatalog(catalog)
 	if err != nil {
@@ -245,6 +245,10 @@ func TestSerializeCatalogRoundTrip(t *testing.T) {
 
 	if strings.Contains(string(data), "interleaved") {
 		t.Fatalf("serialized file should not persist unmodified builtin presets:\n%s", data)
+	}
+
+	if strings.Contains(string(data), "bus.map") {
+		t.Fatalf("serialized file should not use dot notation:\n%s", data)
 	}
 
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
@@ -266,7 +270,7 @@ func TestSerializeCatalogRoundTrip(t *testing.T) {
 		t.Fatalf("reloaded commute preset = %v", reloaded.presets["commute"])
 	}
 
-	if len(reloaded.intro) != 1 || reloaded.intro[0] != "weather" {
+	if len(reloaded.intro) != 1 || reloaded.intro[0].Name != "weather" {
 		t.Fatalf("reloaded intro = %v, want [weather]", reloaded.intro)
 	}
 
@@ -284,34 +288,34 @@ func TestSerializeCatalogRoundTrip(t *testing.T) {
 	}
 }
 
-func TestNormalizeViewList(t *testing.T) {
-	names, err := normalizeViewList([]string{"bus", "map", "progress"})
+func TestNormalizeViewEntries(t *testing.T) {
+	entries, err := normalizeViewEntries(entriesForNames([]string{"bus", "map", "progress"}))
 	if err != nil {
-		t.Fatalf("normalizeViewList: %v", err)
+		t.Fatalf("normalizeViewEntries: %v", err)
 	}
 
 	want := []string{"bus.schedule", "bus.map", "bus.progress"}
 	for i := range want {
-		if names[i] != want[i] {
-			t.Fatalf("normalized = %v, want %v", names, want)
+		if entries[i].Name != want[i] {
+			t.Fatalf("normalized = %v, want %v", entries, want)
 		}
 	}
 
-	if _, err := normalizeViewList(nil); err == nil {
-		t.Fatal("normalizeViewList(empty) = nil error")
+	if _, err := normalizeViewEntries(nil); err == nil {
+		t.Fatal("normalizeViewEntries(empty) = nil error")
 	}
 
-	if _, err := normalizeViewList([]string{"weather", "mup"}); err == nil {
-		t.Fatal("normalizeViewList(unknown) = nil error")
+	if _, err := normalizeViewEntries(entriesForNames([]string{"weather", "mup"})); err == nil {
+		t.Fatal("normalizeViewEntries(unknown) = nil error")
 	}
 
-	longOrder := make([]string, 21)
+	longOrder := make([]viewEntry, 21)
 	for i := range longOrder {
-		longOrder[i] = "weather"
+		longOrder[i] = viewEntry{Name: "weather"}
 	}
 
-	if _, err := normalizeViewList(longOrder); err == nil {
-		t.Fatal("normalizeViewList(21 views) = nil error")
+	if _, err := normalizeViewEntries(longOrder); err == nil {
+		t.Fatal("normalizeViewEntries(21 views) = nil error")
 	}
 }
 
@@ -362,7 +366,7 @@ func TestBoardServiceIntroMutations(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 
-	if len(catalog.intro) != 1 || catalog.intro[0] != "weather" {
+	if len(catalog.intro) != 1 || catalog.intro[0].Name != "weather" {
 		t.Fatalf("reloaded intro = %v, want [weather]", catalog.intro)
 	}
 
@@ -406,4 +410,126 @@ func TestBoardServiceIntroMutations(t *testing.T) {
 	if err := board.SetTimelineIntro(tooManyViews); err == nil {
 		t.Fatal("SetTimelineIntro(21 views) = nil error")
 	}
+}
+
+func TestSerializeCatalogGroupedEntriesWithOverrides(t *testing.T) {
+	catalog := DefaultTimelineCatalog()
+
+	duration := 3 * time.Minute
+	refresh := 15 * time.Second
+
+	catalog.order = []viewEntry{
+		{Name: "weather", Duration: &duration},
+		{Name: "bus.schedule", Refresh: &refresh},
+	}
+	catalog.presets["commute"] = []viewEntry{
+		{Name: "bus.map", Duration: &duration, Refresh: &refresh},
+		{Name: "bus.progress"},
+	}
+
+	data, err := serializeCatalog(catalog)
+	if err != nil {
+		t.Fatalf("serializeCatalog: %v", err)
+	}
+
+	rendered := string(data)
+
+	if strings.Contains(rendered, "bus.map") ||
+		strings.Contains(rendered, "bus.schedule") ||
+		strings.Contains(rendered, "bus.progress") {
+		t.Fatalf("serialized file should use grouped entries:\n%s", rendered)
+	}
+
+	path := filepath.Join(t.TempDir(), "board-timeline.yml")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	reloaded, err := LoadTimelineCatalog(path)
+	if err != nil {
+		t.Fatalf("LoadTimelineCatalog: %v", err)
+	}
+
+	timeline, err := reloaded.Resolve("")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if len(timeline.Steps) != 2 ||
+		timeline.Steps[0].Duration != 3*time.Minute ||
+		timeline.Steps[0].Refresh != time.Minute ||
+		timeline.Steps[1].Refresh != 15*time.Second {
+		t.Fatalf("reloaded order timeline = %+v", timeline.Steps)
+	}
+
+	presetTimeline, err := reloaded.Resolve("commute")
+	if err != nil {
+		t.Fatalf("Resolve(commute): %v", err)
+	}
+
+	if len(presetTimeline.Steps) != 2 ||
+		presetTimeline.Steps[0].Duration != 3*time.Minute ||
+		presetTimeline.Steps[0].Refresh != 15*time.Second ||
+		presetTimeline.Steps[1].Refresh != 25*time.Second {
+		t.Fatalf("reloaded commute timeline = %+v", presetTimeline.Steps)
+	}
+}
+
+func TestBoardServiceSetTimelineOrderWithOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "board-timeline.yml")
+	board := NewBoardService("", nil, nil, nil, nil, path)
+
+	// The per-entry compact grammar flows through the API into the YAML file.
+	if err := board.SetTimelineOrder("weather:2m:30s,bus.map:45s:15s"); err != nil {
+		t.Fatalf("SetTimelineOrder: %v", err)
+	}
+
+	settings := board.TimelineSettings()
+	if len(settings.Order) != 2 ||
+		settings.Order[0] != "weather:2m:30s" ||
+		settings.Order[1] != "bus.map:45s:15s" {
+		t.Fatalf("settings order = %v", settings.Order)
+	}
+
+	timeline, err := board.ResolveTimeline("")
+	if err != nil {
+		t.Fatalf("ResolveTimeline: %v", err)
+	}
+
+	if len(timeline.Steps) != 2 ||
+		timeline.Steps[0].Duration != 2*time.Minute ||
+		timeline.Steps[0].Refresh != 30*time.Second ||
+		timeline.Steps[1].Duration != 45*time.Second ||
+		timeline.Steps[1].Refresh != 15*time.Second {
+		t.Fatalf("resolved timeline = %+v", timeline.Steps)
+	}
+
+	catalog, err := LoadTimelineCatalog(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	if strings.Contains(string(mustReadFile(t, path)), "bus.map") {
+		t.Fatalf("persisted file should use grouped entries:\n%s", mustReadFile(t, path))
+	}
+
+	reloaded, err := catalog.Resolve("")
+	if err != nil {
+		t.Fatalf("resolve after reload: %v", err)
+	}
+
+	if len(reloaded.Steps) != 2 || reloaded.Steps[1].Duration != 45*time.Second {
+		t.Fatalf("reloaded timeline = %+v", reloaded.Steps)
+	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	return data
 }

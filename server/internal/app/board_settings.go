@@ -76,15 +76,32 @@ func normalizePresetName(name string) (string, error) {
 	return normalized, nil
 }
 
-func normalizeViewList(viewNames []string) ([]string, error) {
-	if len(viewNames) < 1 || len(viewNames) > timelineMaxOrder {
+// entriesFromStrings parses view reference strings ("weather",
+// "bus.map", "bus.map:30s:10s") into view entries.
+func entriesFromStrings(values []string) ([]viewEntry, error) {
+	entries := make([]viewEntry, 0, len(values))
+
+	for _, value := range values {
+		entry, err := parseViewExpression(value)
+		if err != nil {
+			return nil, err
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+func normalizeViewEntries(entries []viewEntry) ([]viewEntry, error) {
+	if len(entries) < 1 || len(entries) > timelineMaxOrder {
 		return nil, fmt.Errorf("order must contain between 1 and %d views", timelineMaxOrder)
 	}
 
-	normalized := make([]string, 0, len(viewNames))
+	normalized := make([]viewEntry, 0, len(entries))
 
-	for _, name := range viewNames {
-		panel, err := panelForViewName(name)
+	for _, entry := range entries {
+		canonical, err := entry.Canonical()
 		if err != nil {
 			return nil, fmt.Errorf(
 				"%w (available: %s)",
@@ -93,7 +110,7 @@ func normalizeViewList(viewNames []string) ([]string, error) {
 			)
 		}
 
-		normalized = append(normalized, canonicalViewName(panel))
+		normalized = append(normalized, canonical)
 	}
 
 	return normalized, nil
@@ -104,13 +121,23 @@ func isBuiltinPreset(name string) bool {
 	return ok
 }
 
-func equalStringSlices(a, b []string) bool {
+func equalEntries(a, b []viewEntry) bool {
 	if len(a) != len(b) {
 		return false
 	}
 
 	for i := range a {
-		if a[i] != b[i] {
+		ca, err := a[i].Canonical()
+		if err != nil {
+			return false
+		}
+
+		cb, err := b[i].Canonical()
+		if err != nil {
+			return false
+		}
+
+		if ca.String() != cb.String() {
 			return false
 		}
 	}
@@ -118,12 +145,18 @@ func equalStringSlices(a, b []string) bool {
 	return true
 }
 
-func durationString(d time.Duration) string {
-	if d%time.Minute == 0 {
-		return fmt.Sprintf("%dm", d/time.Minute)
+func cloneEntries(entries []viewEntry) []viewEntry {
+	if entries == nil {
+		return nil
 	}
 
-	return fmt.Sprintf("%ds", d/time.Second)
+	cloned := make([]viewEntry, len(entries))
+
+	for i, entry := range entries {
+		cloned[i] = viewEntry{Name: entry.Name, Duration: entry.Duration, Refresh: entry.Refresh}
+	}
+
+	return cloned
 }
 
 func (c *TimelineCatalog) clone() *TimelineCatalog {
@@ -133,20 +166,28 @@ func (c *TimelineCatalog) clone() *TimelineCatalog {
 
 	cloned := &TimelineCatalog{
 		views:   make(map[display.Panel]TimelineStep, len(c.views)),
-		presets: make(map[string][]string, len(c.presets)),
-		order:   append([]string(nil), c.order...),
-		intro:   append([]string(nil), c.intro...),
+		presets: make(map[string][]viewEntry, len(c.presets)),
+		order:   cloneEntries(c.order),
+		intro:   cloneEntries(c.intro),
 	}
 
 	for panel, step := range c.views {
 		cloned.views[panel] = step
 	}
 
-	for name, order := range c.presets {
-		cloned.presets[name] = append([]string(nil), order...)
+	for name, entries := range c.presets {
+		cloned.presets[name] = cloneEntries(entries)
 	}
 
 	return cloned
+}
+
+func durationString(d time.Duration) string {
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%dm", d/time.Minute)
+	}
+
+	return fmt.Sprintf("%ds", d/time.Second)
 }
 
 func (c *TimelineCatalog) setViewSettings(
@@ -211,8 +252,8 @@ func (c *TimelineCatalog) setViewSettings(
 	return nil
 }
 
-func (c *TimelineCatalog) setOrder(viewNames []string) error {
-	normalized, err := normalizeViewList(viewNames)
+func (c *TimelineCatalog) setOrder(entries []viewEntry) error {
+	normalized, err := normalizeViewEntries(entries)
 	if err != nil {
 		return err
 	}
@@ -222,15 +263,15 @@ func (c *TimelineCatalog) setOrder(viewNames []string) error {
 	return nil
 }
 
-func (c *TimelineCatalog) setIntro(viewNames []string) error {
-	if len(viewNames) > timelineMaxOrder {
+func (c *TimelineCatalog) setIntro(entries []viewEntry) error {
+	if len(entries) > timelineMaxOrder {
 		return fmt.Errorf("intro must contain at most %d views", timelineMaxOrder)
 	}
 
-	normalized := make([]string, 0, len(viewNames))
+	normalized := make([]viewEntry, 0, len(entries))
 
-	for _, name := range viewNames {
-		panel, err := panelForViewName(name)
+	for _, entry := range entries {
+		canonical, err := entry.Canonical()
 		if err != nil {
 			return fmt.Errorf(
 				"%w (available: %s)",
@@ -239,7 +280,7 @@ func (c *TimelineCatalog) setIntro(viewNames []string) error {
 			)
 		}
 
-		normalized = append(normalized, canonicalViewName(panel))
+		normalized = append(normalized, canonical)
 	}
 
 	c.intro = normalized
@@ -247,31 +288,22 @@ func (c *TimelineCatalog) setIntro(viewNames []string) error {
 	return nil
 }
 
-func (c *TimelineCatalog) orderFromExpression(expr string) ([]string, error) {
+func (c *TimelineCatalog) orderFromExpression(expr string) ([]viewEntry, error) {
 	trimmed := strings.TrimSpace(expr)
 	if trimmed == "" {
 		return nil, fmt.Errorf("order is required")
 	}
 
-	if !strings.ContainsAny(trimmed, ",.") {
-		entries, err := c.preset(trimmed)
-		if err != nil {
-			return nil, err
-		}
-
-		return append([]string(nil), entries...), nil
-	}
-
-	return strings.Split(trimmed, ","), nil
+	return c.orderEntries(trimmed)
 }
 
-func (c *TimelineCatalog) putPreset(name string, order []string) error {
+func (c *TimelineCatalog) putPreset(name string, entries []viewEntry) error {
 	normalizedName, err := normalizePresetName(name)
 	if err != nil {
 		return err
 	}
 
-	normalizedOrder, err := normalizeViewList(order)
+	normalizedOrder, err := normalizeViewEntries(entries)
 	if err != nil {
 		return err
 	}
@@ -300,12 +332,28 @@ func (c *TimelineCatalog) deletePreset(name string) error {
 	return nil
 }
 
+func entryStrings(entries []viewEntry) []string {
+	out := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		rendered := entry.String()
+
+		if canonical, err := entry.Canonical(); err == nil {
+			rendered = canonical.String()
+		}
+
+		out = append(out, rendered)
+	}
+
+	return out
+}
+
 func (c *TimelineCatalog) settings() BoardTimelineSettings {
 	settings := BoardTimelineSettings{
 		Views:          map[string]BoardViewSettings{},
 		Presets:        []BoardPreset{},
-		Order:          append([]string(nil), c.order...),
-		Intro:          append([]string{}, c.intro...),
+		Order:          entryStrings(c.order),
+		Intro:          entryStrings(c.intro),
 		AvailableViews: availableViewNames(),
 	}
 
@@ -325,7 +373,7 @@ func (c *TimelineCatalog) settings() BoardTimelineSettings {
 	for _, name := range names {
 		settings.Presets = append(settings.Presets, BoardPreset{
 			Name:    name,
-			Order:   append([]string(nil), c.presets[name]...),
+			Order:   entryStrings(c.presets[name]),
 			BuiltIn: isBuiltinPreset(name),
 		})
 	}
@@ -355,12 +403,76 @@ func viewSettingsNode(step TimelineStep) *yaml.Node {
 	return node
 }
 
-func serializeCatalog(c *TimelineCatalog) ([]byte, error) {
-	if c == nil {
-		c = DefaultTimelineCatalog()
+func entrySettingsNode(entry viewEntry) *yaml.Node {
+	node := &yaml.Node{
+		Kind:  yaml.MappingNode,
+		Tag:   "!!map",
+		Style: yaml.FlowStyle,
 	}
 
-	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	if entry.Duration != nil {
+		node.Content = append(
+			node.Content,
+			yamlScalar("duration"),
+			yamlScalar(durationString(*entry.Duration)),
+		)
+	}
+
+	if entry.Refresh != nil {
+		node.Content = append(
+			node.Content,
+			yamlScalar("refresh"),
+			yamlScalar(durationString(*entry.Refresh)),
+		)
+	}
+
+	return node
+}
+
+func viewPairNode(name string, value *yaml.Node) *yaml.Node {
+	node := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	node.Content = append(node.Content, yamlScalar(name), value)
+
+	return node
+}
+
+// entryNode renders one view entry for an order/intro/preset sequence:
+//   - "weather"                            -> - weather
+//   - "bus.schedule"                       -> - bus: schedule
+//   - "weather" with duration 3m           -> - weather: {duration: 3m}
+//   - "bus.schedule" with duration 3m, 15s -> - bus:
+//     schedule: {duration: 3m, refresh: 15s}
+func entryNode(entry viewEntry) (*yaml.Node, error) {
+	canonical, err := entry.Canonical()
+	if err != nil {
+		return nil, err
+	}
+
+	prefix, leaf, grouped := strings.Cut(canonical.Name, ".")
+
+	if !canonical.HasOverrides() {
+		if grouped {
+			return viewPairNode(prefix, yamlScalar(leaf)), nil
+		}
+
+		return yamlScalar(canonical.Name), nil
+	}
+
+	settings := entrySettingsNode(canonical)
+
+	if grouped {
+		inner := viewPairNode(leaf, settings)
+
+		return viewPairNode(prefix, inner), nil
+	}
+
+	return viewPairNode(canonical.Name, settings), nil
+}
+
+// viewsNode serializes the per-view settings, grouping views that share a
+// prefix (bus.map, bus.schedule, bus.progress) under a parent key.
+func viewsNode(c *TimelineCatalog) *yaml.Node {
+	views := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
 	viewNames := make([]string, 0, len(c.views))
 	for panel := range c.views {
@@ -368,7 +480,7 @@ func serializeCatalog(c *TimelineCatalog) ([]byte, error) {
 	}
 	sort.Strings(viewNames)
 
-	views := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	groups := map[string]*yaml.Node{}
 
 	for _, name := range viewNames {
 		panel, err := panelForViewName(name)
@@ -386,34 +498,80 @@ func serializeCatalog(c *TimelineCatalog) ([]byte, error) {
 			continue
 		}
 
-		views.Content = append(
-			views.Content,
-			yamlScalar(name),
+		prefix, leaf, grouped := strings.Cut(name, ".")
+		if !grouped {
+			views.Content = append(
+				views.Content,
+				yamlScalar(name),
+				viewSettingsNode(step),
+			)
+
+			continue
+		}
+
+		group, ok := groups[prefix]
+		if !ok {
+			group = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+			groups[prefix] = group
+
+			views.Content = append(views.Content, yamlScalar(prefix), group)
+		}
+
+		group.Content = append(
+			group.Content,
+			yamlScalar(leaf),
 			viewSettingsNode(step),
 		)
 	}
 
-	if len(views.Content) > 0 {
+	return views
+}
+
+func entriesSeq(entries []viewEntry) (*yaml.Node, error) {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+
+	for _, entry := range entries {
+		node, err := entryNode(entry)
+		if err != nil {
+			return nil, err
+		}
+
+		seq.Content = append(seq.Content, node)
+	}
+
+	return seq, nil
+}
+
+func serializeCatalog(c *TimelineCatalog) ([]byte, error) {
+	if c == nil {
+		c = DefaultTimelineCatalog()
+	}
+
+	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+
+	if views := viewsNode(c); len(views.Content) > 0 {
 		root.Content = append(root.Content, yamlScalar("views"), views)
 	}
 
 	if len(c.intro) > 0 {
-		intro := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-		for _, name := range c.intro {
-			intro.Content = append(intro.Content, yamlScalar(name))
+		intro, err := entriesSeq(c.intro)
+		if err != nil {
+			return nil, err
 		}
+
 		root.Content = append(root.Content, yamlScalar("intro"), intro)
 	}
 
-	order := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	for _, name := range c.order {
-		order.Content = append(order.Content, yamlScalar(name))
+	order, err := entriesSeq(c.order)
+	if err != nil {
+		return nil, err
 	}
+
 	root.Content = append(root.Content, yamlScalar("order"), order)
 
 	presetNames := make([]string, 0, len(c.presets))
 	for name := range c.presets {
-		if isBuiltinPreset(name) && equalStringSlices(c.presets[name], builtinPresets[name]) {
+		if isBuiltinPreset(name) && equalEntries(c.presets[name], entriesForNames(builtinPresets[name])) {
 			continue
 		}
 
@@ -425,9 +583,9 @@ func serializeCatalog(c *TimelineCatalog) ([]byte, error) {
 		presets := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 
 		for _, name := range presetNames {
-			seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-			for _, viewName := range c.presets[name] {
-				seq.Content = append(seq.Content, yamlScalar(viewName))
+			seq, err := entriesSeq(c.presets[name])
+			if err != nil {
+				return nil, err
 			}
 
 			presets.Content = append(presets.Content, yamlScalar(name), seq)
@@ -522,13 +680,18 @@ func (b *BoardService) GetPreset(name string) (BoardPreset, error) {
 
 	return BoardPreset{
 		Name:    normalizedName,
-		Order:   append([]string(nil), order...),
+		Order:   entryStrings(order),
 		BuiltIn: isBuiltinPreset(normalizedName),
 	}, nil
 }
 
 func (b *BoardService) CreatePreset(name string, order []string) error {
 	normalizedName, err := normalizePresetName(name)
+	if err != nil {
+		return err
+	}
+
+	entries, err := entriesFromStrings(order)
 	if err != nil {
 		return err
 	}
@@ -546,7 +709,7 @@ func (b *BoardService) CreatePreset(name string, order []string) error {
 	}
 
 	cloned := catalog.clone()
-	if err := cloned.putPreset(normalizedName, order); err != nil {
+	if err := cloned.putPreset(normalizedName, entries); err != nil {
 		return err
 	}
 
@@ -555,6 +718,11 @@ func (b *BoardService) CreatePreset(name string, order []string) error {
 
 func (b *BoardService) UpdatePreset(name string, order []string) error {
 	normalizedName, err := normalizePresetName(name)
+	if err != nil {
+		return err
+	}
+
+	entries, err := entriesFromStrings(order)
 	if err != nil {
 		return err
 	}
@@ -572,7 +740,7 @@ func (b *BoardService) UpdatePreset(name string, order []string) error {
 	}
 
 	cloned := catalog.clone()
-	if err := cloned.putPreset(normalizedName, order); err != nil {
+	if err := cloned.putPreset(normalizedName, entries); err != nil {
 		return err
 	}
 
@@ -645,12 +813,12 @@ func (b *BoardService) SetTimelineOrder(expr string) error {
 
 	cloned := catalog.clone()
 
-	viewNames, err := cloned.orderFromExpression(expr)
+	entries, err := cloned.orderFromExpression(expr)
 	if err != nil {
 		return err
 	}
 
-	if err := cloned.setOrder(viewNames); err != nil {
+	if err := cloned.setOrder(entries); err != nil {
 		return err
 	}
 
@@ -667,7 +835,13 @@ func (b *BoardService) SetTimelineOrderViews(views []string) error {
 	}
 
 	cloned := catalog.clone()
-	if err := cloned.setOrder(views); err != nil {
+
+	entries, err := entriesFromStrings(views)
+	if err != nil {
+		return err
+	}
+
+	if err := cloned.setOrder(entries); err != nil {
 		return err
 	}
 
@@ -684,7 +858,13 @@ func (b *BoardService) SetTimelineIntro(views []string) error {
 	}
 
 	cloned := catalog.clone()
-	if err := cloned.setIntro(views); err != nil {
+
+	entries, err := entriesFromStrings(views)
+	if err != nil {
+		return err
+	}
+
+	if err := cloned.setIntro(entries); err != nil {
 		return err
 	}
 
