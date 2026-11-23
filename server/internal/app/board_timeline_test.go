@@ -446,7 +446,7 @@ func TestNewTimelineFromLegacySchedule(t *testing.T) {
 
 func TestBoardServiceResolveTimeline(t *testing.T) {
 	// Without a catalog, alarms always fall back to the server default.
-	board := NewBoardService("", nil, nil, nil, nil)
+	board := NewBoardService("", nil, nil, nil, nil, "")
 
 	timeline, err := board.ResolveTimeline("bus-focus")
 	if err != nil {
@@ -457,7 +457,7 @@ func TestBoardServiceResolveTimeline(t *testing.T) {
 		t.Fatalf("ResolveTimeline without catalog: %+v", timeline)
 	}
 
-	board = NewBoardService("", nil, nil, nil, DefaultTimelineCatalog())
+	board = NewBoardService("", nil, nil, nil, DefaultTimelineCatalog(), "")
 
 	timeline, err = board.ResolveTimeline("")
 	if err != nil || timeline == nil {
@@ -485,5 +485,458 @@ func TestBoardServiceResolveTimeline(t *testing.T) {
 
 	if _, err := board.ResolveTimeline("no-such-preset"); err == nil {
 		t.Fatalf("unknown preset did not fail")
+	}
+}
+
+func TestTimelineAtWithIntro(t *testing.T) {
+	timeline := &Timeline{
+		Intro: []TimelineStep{
+			{Panel: display.PanelWeather, Duration: 60 * time.Second, Refresh: 30 * time.Second},
+		},
+		Steps: []TimelineStep{
+			{Panel: display.PanelBus, Duration: 120 * time.Second, Refresh: 60 * time.Second},
+			{Panel: display.PanelBusProgress, Duration: 60 * time.Second, Refresh: 30 * time.Second},
+		},
+	}
+
+	if err := timeline.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	start := time.Date(2026, 3, 2, 7, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		offset time.Duration
+		panel  display.Panel
+		step   int
+		tick   int
+	}{
+		{0, display.PanelWeather, 0, 0},
+		{29 * time.Second, display.PanelWeather, 0, 0},
+		{30 * time.Second, display.PanelWeather, 0, 1},
+		{59 * time.Second, display.PanelWeather, 0, 1},
+		{60 * time.Second, display.PanelBus, 1, 0},
+		{90 * time.Second, display.PanelBus, 1, 0},
+		{120 * time.Second, display.PanelBus, 1, 1},
+		{180 * time.Second, display.PanelBusProgress, 2, 0},
+		{210 * time.Second, display.PanelBusProgress, 2, 1},
+		{240 * time.Second, display.PanelBus, 1, 0},         // first wrap: intro never replays
+		{420 * time.Second, display.PanelBus, 1, 0},         // second wrap
+		{580 * time.Second, display.PanelBusProgress, 2, 1}, // third wrap mid-loop
+	}
+
+	for _, test := range tests {
+		slot := timeline.At(start, start.Add(test.offset))
+
+		if slot.Panel != test.panel || slot.Step != test.step || slot.Tick != test.tick {
+			t.Errorf(
+				"At(+%s) = {panel %s step %d tick %d}, want {panel %s step %d tick %d}",
+				test.offset,
+				slot.Panel,
+				slot.Step,
+				slot.Tick,
+				test.panel,
+				test.step,
+				test.tick,
+			)
+		}
+	}
+
+	// The intro must never appear again once consumed.
+	for offset := 60; offset <= 2_400; offset += 60 {
+		if slot := timeline.At(start, start.Add(time.Duration(offset)*time.Second)); slot.Panel == display.PanelWeather {
+			t.Fatalf("At(+%ds) = weather, intro must not repeat", offset)
+		}
+	}
+
+	if timeline.IntroTotal() != 60*time.Second {
+		t.Fatalf("IntroTotal = %s, want 60s", timeline.IntroTotal())
+	}
+
+	if d := timeline.Duration(BoardSlot{Step: 0}); d != 60*time.Second {
+		t.Fatalf("Duration(intro step 0) = %s, want 60s", d)
+	}
+
+	if d := timeline.Duration(BoardSlot{Step: 1}); d != 120*time.Second {
+		t.Fatalf("Duration(loop step 1) = %s, want 120s", d)
+	}
+
+	if d := timeline.Duration(BoardSlot{Step: 3}); d != 0 {
+		t.Fatalf("Duration(out of range) = %s, want 0", d)
+	}
+}
+
+func TestTimelineNextBoundaryWithIntro(t *testing.T) {
+	timeline := Timeline{
+		Intro: []TimelineStep{
+			{Panel: display.PanelWeather, Duration: 30 * time.Second, Refresh: 30 * time.Second},
+		},
+		Steps: []TimelineStep{
+			{Panel: display.PanelBusMap, Duration: 120 * time.Second, Refresh: 60 * time.Second},
+			{Panel: display.PanelBus, Duration: 120 * time.Second, Refresh: 120 * time.Second},
+		},
+	}
+
+	if err := timeline.validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	start := time.Date(2026, 3, 2, 7, 0, 0, 0, time.UTC)
+
+	expectedBoundaries := []time.Duration{
+		30 * time.Second,  // intro step ends
+		90 * time.Second,  // map refresh tick
+		150 * time.Second, // map ends
+		270 * time.Second, // bus ends, first loop wrap
+		330 * time.Second, // map refresh tick, cycle 2
+		390 * time.Second, // map ends, cycle 2
+		510 * time.Second, // bus ends, cycle 3
+		570 * time.Second, // map refresh tick, cycle 3
+	}
+
+	boundaryIndex := 0
+	pinned := time.Time{}
+
+	totalSeconds := int((timeline.IntroTotal() + 2*timeline.Total()) / time.Second)
+
+	for elapsed := 0; elapsed <= totalSeconds+15; elapsed++ {
+		now := start.Add(time.Duration(elapsed) * time.Second)
+
+		next := timeline.NextBoundary(start, now)
+
+		if !next.After(now) {
+			t.Fatalf("NextBoundary: elapsed %ds: %s not after now", elapsed, next)
+		}
+
+		if !pinned.IsZero() && next.Before(pinned) {
+			t.Fatalf("NextBoundary: elapsed %ds: %s before previous boundary %s", elapsed, next, pinned)
+		}
+
+		if next.After(pinned) {
+			if boundaryIndex >= len(expectedBoundaries) {
+				t.Fatalf("unexpected extra boundary %s at elapsed %ds", next, elapsed)
+			}
+
+			want := start.Add(expectedBoundaries[boundaryIndex])
+			if next != want {
+				t.Fatalf("boundary %d = %s, want %s", boundaryIndex, next, want)
+			}
+
+			pinned = next
+			boundaryIndex++
+		} else {
+			pinned = next
+		}
+	}
+
+	if boundaryIndex != len(expectedBoundaries) {
+		t.Fatalf("reached %d boundaries, want %d", boundaryIndex, len(expectedBoundaries))
+	}
+}
+
+func TestTimelineIntroValidation(t *testing.T) {
+	validSteps := []TimelineStep{
+		{Panel: display.PanelBus, Duration: time.Minute, Refresh: 30 * time.Second},
+	}
+
+	tests := []struct {
+		name     string
+		intro    []TimelineStep
+		steps    []TimelineStep
+		wantFail bool
+	}{
+		{
+			name:  "no intro is valid",
+			intro: nil,
+			steps: validSteps,
+		},
+		{
+			name:  "valid intro",
+			intro: []TimelineStep{{Panel: display.PanelWeather, Duration: 5 * time.Minute, Refresh: 60 * time.Second}},
+			steps: validSteps,
+		},
+		{
+			name:     "intro refresh below floor",
+			intro:    []TimelineStep{{Panel: display.PanelWeather, Duration: 5 * time.Minute, Refresh: 5 * time.Second}},
+			steps:    validSteps,
+			wantFail: true,
+		},
+		{
+			name:     "intro refresh exceeds duration",
+			intro:    []TimelineStep{{Panel: display.PanelWeather, Duration: 30 * time.Second, Refresh: 60 * time.Second}},
+			steps:    validSteps,
+			wantFail: true,
+		},
+		{
+			name:     "intro alone cannot replace the loop",
+			intro:    []TimelineStep{{Panel: display.PanelWeather, Duration: 5 * time.Minute, Refresh: 60 * time.Second}},
+			steps:    nil,
+			wantFail: true,
+		},
+	}
+
+	for _, test := range tests {
+		timeline := &Timeline{Intro: test.intro, Steps: test.steps}
+
+		err := timeline.validate()
+
+		if (err != nil) != test.wantFail {
+			t.Errorf("%s: validate err = %v, wantFail %v", test.name, err, test.wantFail)
+		}
+	}
+}
+
+func TestTimelineCatalogIntroDecode(t *testing.T) {
+	tests := []struct {
+		name      string
+		file      string
+		wantIntro []string
+		wantError bool
+	}{
+		{
+			name:      "no intro section",
+			file:      "order: [bus.schedule]\n",
+			wantIntro: nil,
+		},
+		{
+			name:      "empty intro list",
+			file:      "order: [bus.schedule]\nintro: []\n",
+			wantIntro: nil,
+		},
+		{
+			name:      "null intro",
+			file:      "order: [bus.schedule]\nintro: ~\n",
+			wantIntro: nil,
+		},
+		{
+			name:      "intro view list",
+			file:      "order: [bus.schedule]\nintro: [weather, bus.map]\n",
+			wantIntro: []string{"weather", "bus.map"},
+		},
+		{
+			name:      "intro from preset name",
+			file:      "order: [bus.schedule]\nintro: bus-focus\n",
+			wantIntro: []string{"bus.map", "bus.schedule", "bus.progress", "weather"},
+		},
+		{
+			name:      "unknown view in intro",
+			file:      "order: [bus.schedule]\nintro: [nonsense]\n",
+			wantError: true,
+		},
+	}
+
+	for _, test := range tests {
+		path := filepath.Join(t.TempDir(), "board-timeline.yml")
+
+		if err := os.WriteFile(path, []byte(test.file), 0o644); err != nil {
+			t.Fatalf("%s: write: %v", test.name, err)
+		}
+
+		catalog, err := LoadTimelineCatalog(path)
+
+		if test.wantError {
+			if err == nil {
+				t.Errorf("%s: LoadTimelineCatalog err = nil, want error", test.name)
+			}
+
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("%s: LoadTimelineCatalog: %v", test.name, err)
+		}
+
+		if len(catalog.intro) != len(test.wantIntro) {
+			t.Fatalf("%s: intro = %v, want %v", test.name, catalog.intro, test.wantIntro)
+		}
+
+		for i := range test.wantIntro {
+			if catalog.intro[i] != test.wantIntro[i] {
+				t.Errorf("%s: intro[%d] = %s, want %s", test.name, i, catalog.intro[i], test.wantIntro[i])
+			}
+		}
+
+		timeline, err := catalog.Resolve("")
+		if err != nil {
+			t.Fatalf("%s: Resolve: %v", test.name, err)
+		}
+
+		if len(timeline.Intro) != len(test.wantIntro) {
+			t.Fatalf("%s: timeline intro = %d steps, want %d", test.name, len(timeline.Intro), len(test.wantIntro))
+		}
+	}
+}
+
+func TestTimelineCatalogResolveForCast(t *testing.T) {
+	catalog := DefaultTimelineCatalog()
+	catalog.intro = []string{"weather"} // global intro must NOT leak into casts
+
+	introPanels := func(tl *Timeline) []display.Panel {
+		panels := make([]display.Panel, 0, len(tl.Intro))
+		for _, step := range tl.Intro {
+			panels = append(panels, step.Panel)
+		}
+		return panels
+	}
+
+	// Opt-in is explicit: empty intro plays nothing, even when the
+	// catalog has a configured global intro.
+	timeline, err := catalog.ResolveForCast("bus-focus", "")
+	if err != nil {
+		t.Fatalf("ResolveForCast(no intro): %v", err)
+	}
+
+	if len(timeline.Intro) != 0 {
+		t.Fatalf("cast with empty intro = %+v, want no intro", timeline.Intro)
+	}
+
+	if len(timeline.Steps) == 0 {
+		t.Fatal("cast with empty intro lost the loop")
+	}
+
+	// A single view name works (the main case: weather first).
+	timeline, err = catalog.ResolveForCast("", "weather")
+	if err != nil {
+		t.Fatalf("ResolveForCast(weather intro): %v", err)
+	}
+
+	panels := introPanels(timeline)
+	if len(panels) != 1 || panels[0] != display.PanelWeather {
+		t.Fatalf("intro panels = %v, want [weather]", panels)
+	}
+
+	// A comma-separated list.
+	timeline, err = catalog.ResolveForCast("bus-focus", "weather,bus.map")
+	if err != nil {
+		t.Fatalf("ResolveForCast(list intro): %v", err)
+	}
+
+	panels = introPanels(timeline)
+	if len(panels) != 2 ||
+		panels[0] != display.PanelWeather ||
+		panels[1] != display.PanelBusMap {
+		t.Fatalf("intro panels = %v, want [weather bus-map]", panels)
+	}
+
+	// A preset name expands to that preset's order as the intro.
+	timeline, err = catalog.ResolveForCast("", "bus-focus")
+	if err != nil {
+		t.Fatalf("ResolveForCast(preset intro): %v", err)
+	}
+
+	panels = introPanels(timeline)
+	if len(panels) != 4 || panels[0] != display.PanelBusMap {
+		t.Fatalf("bus-focus intro = %v", panels)
+	}
+
+	// Loop order still resolves alongside any intro expression.
+	timeline, err = catalog.ResolveForCast("interleaved", "weather")
+	if err != nil {
+		t.Fatalf("ResolveForCast(interleaved): %v", err)
+	}
+
+	if len(timeline.Steps) != 6 || timeline.Steps[0].Panel != display.PanelWeather {
+		t.Fatalf("interleaved loop = %d steps", len(timeline.Steps))
+	}
+
+	// Unknown views reject the whole cast resolution.
+	if _, err := catalog.ResolveForCast("", "mup"); err == nil {
+		t.Fatal("ResolveForCast(unknown intro view) = nil error")
+	}
+
+	if _, err := catalog.ResolveForCast("", "no-such-preset"); err == nil {
+		t.Fatal("ResolveForCast(unknown intro preset) = nil error")
+	}
+
+	if _, err := catalog.ResolveForCast("no-such-preset", "weather"); err == nil {
+		t.Fatal("ResolveForCast(unknown order) = nil error")
+	}
+
+	// Intro length is bounded like the order.
+	longIntro := "weather"
+	for len(longIntro+",weather") <= 200 {
+		longIntro += ",weather"
+	}
+
+	if _, err := catalog.ResolveForCast("", longIntro+",weather,eventually-more"); err == nil {
+		t.Fatal("ResolveForCast(over-long intro) = nil error")
+	}
+}
+
+func TestBoardServiceResolveTimelineForCast(t *testing.T) {
+	catalog := DefaultTimelineCatalog()
+	catalog.intro = []string{"weather"}
+	catalog.order = []string{"bus.schedule", "bus.map", "bus.progress"}
+
+	path := filepath.Join(t.TempDir(), "board-timeline.yml")
+
+	if err := os.WriteFile(path, []byte("intro: [weather]\norder: [bus.schedule]\n"), 0o644); err != nil {
+		t.Fatalf("write timeline: %v", err)
+	}
+
+	loaded, err := LoadTimelineCatalog(path)
+	if err != nil {
+		t.Fatalf("LoadTimelineCatalog: %v", err)
+	}
+
+	board := NewBoardService("", nil, nil, nil, loaded, path)
+
+	// No intro requested: only the loop, even though the catalog
+	// configures a global intro.
+	timeline, err := board.ResolveTimelineForCast("", "")
+	if err != nil {
+		t.Fatalf("ResolveTimelineForCast(empty): %v", err)
+	}
+
+	if len(timeline.Intro) != 0 || len(timeline.Steps) != 1 || timeline.Steps[0].Panel != display.PanelBus {
+		t.Fatalf("cast timeline = %+v", timeline)
+	}
+
+	// Opt-in intro from a single view name.
+	timeline, err = board.ResolveTimelineForCast("bus-focus", "weather")
+	if err != nil {
+		t.Fatalf("ResolveTimelineForCast(intro): %v", err)
+	}
+
+	if len(timeline.Intro) != 1 || timeline.Intro[0].Panel != display.PanelWeather {
+		t.Fatalf("cast intro = %+v", timeline.Intro)
+	}
+
+	if len(timeline.Steps) != 4 || timeline.Steps[0].Panel != display.PanelBusMap {
+		t.Fatalf("cast loop = %+v", timeline.Steps)
+	}
+
+	// A board without a catalog still resolves expressions from
+	// defaults, and serves its configured timeline when nothing is
+	// requested.
+	defaultBoard := NewBoardService("", nil, nil, nil, nil, "")
+
+	timeline, err = defaultBoard.ResolveTimelineForCast("", "")
+	if err != nil {
+		t.Fatalf("default ResolveTimelineForCast: %v", err)
+	}
+
+	if timeline == nil || len(timeline.Steps) == 0 {
+		t.Fatalf("default cast timeline = %+v", timeline)
+	}
+
+	timeline, err = defaultBoard.ResolveTimelineForCast("", "weather")
+	if err != nil {
+		t.Fatalf("default ResolveTimelineForCast(intro): %v", err)
+	}
+
+	if len(timeline.Intro) != 1 || timeline.Intro[0].Panel != display.PanelWeather {
+		t.Fatalf("default cast intro = %+v", timeline.Intro)
+	}
+
+	// The default catalog route still unwraps the global intro for
+	// non-cast (preview / default timeline) consumers.
+	timeline, err = loaded.Resolve("")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	if len(timeline.Intro) != 1 || timeline.Intro[0].Panel != display.PanelWeather {
+		t.Fatalf("default resolve intro = %+v", timeline.Intro)
 	}
 }

@@ -92,6 +92,7 @@ func run(minutes int, stop string, order string) error {
 		app.NewBusRealtimeService(realtimeClient(cfg)),
 		timeline,
 		catalog,
+		filepath.Join(cfg.DataDir, "board-timeline.yml"),
 	)
 
 	var basemapProvider display.BasemapProvider

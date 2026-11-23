@@ -23,6 +23,7 @@ type TimelineStep struct {
 }
 
 type Timeline struct {
+	Intro []TimelineStep
 	Steps []TimelineStep
 }
 
@@ -34,16 +35,40 @@ type BoardSlot struct {
 
 func (tl *Timeline) At(start, t time.Time) BoardSlot {
 	elapsed := t.Sub(start)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+
+	introTotal := tl.IntroTotal()
+	if elapsed < introTotal {
+		offset := elapsed
+
+		for stepIndex, step := range tl.Intro {
+			if offset < step.Duration {
+				tickIndex := int(offset / step.Refresh)
+
+				return BoardSlot{
+					Panel: step.Panel,
+					Step:  stepIndex,
+					Tick:  tickIndex,
+				}
+			}
+
+			offset -= step.Duration
+		}
+	}
 
 	total := tl.Total()
 	if total <= 0 {
 		return BoardSlot{}
 	}
 
-	offset := elapsed % total
+	offset := (elapsed - introTotal) % total
 	if offset < 0 {
 		offset += total
 	}
+
+	introLen := len(tl.Intro)
 
 	for stepIndex, step := range tl.Steps {
 		if offset < step.Duration {
@@ -51,7 +76,7 @@ func (tl *Timeline) At(start, t time.Time) BoardSlot {
 
 			return BoardSlot{
 				Panel: step.Panel,
-				Step:  stepIndex,
+				Step:  introLen + stepIndex,
 				Tick:  tickIndex,
 			}
 		}
@@ -72,17 +97,39 @@ func (tl *Timeline) Total() time.Duration {
 	return total
 }
 
+func (tl *Timeline) IntroTotal() time.Duration {
+	var total time.Duration
+
+	for _, step := range tl.Intro {
+		total += step.Duration
+	}
+
+	return total
+}
+
 func (tl *Timeline) Duration(slot BoardSlot) time.Duration {
-	if slot.Step < 0 || slot.Step >= len(tl.Steps) {
+	if slot.Step < 0 {
 		return 0
 	}
 
-	return tl.Steps[slot.Step].Duration
+	introLen := len(tl.Intro)
+
+	if slot.Step < introLen {
+		return tl.Intro[slot.Step].Duration
+	}
+
+	if slot.Step >= introLen+len(tl.Steps) {
+		return 0
+	}
+
+	return tl.Steps[slot.Step-introLen].Duration
 }
 
 func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
+	introTotal := tl.IntroTotal()
 	total := tl.Total()
-	if total <= 0 {
+
+	if introTotal <= 0 && total <= 0 {
 		return t.Add(time.Minute)
 	}
 
@@ -91,9 +138,39 @@ func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
 		elapsed = 0
 	}
 
-	cycleBase := elapsed - elapsed%total
+	if elapsed < introTotal {
+		offset := elapsed
+		stepStart := time.Duration(0)
 
-	offset := elapsed % total
+		for _, step := range tl.Intro {
+			if offset >= step.Duration {
+				offset -= step.Duration
+				stepStart += step.Duration
+
+				continue
+			}
+
+			nextTick := (offset/step.Refresh + 1) * step.Refresh
+
+			if nextTick < step.Duration {
+				return start.Add(stepStart + nextTick)
+			}
+
+			return start.Add(stepStart + step.Duration)
+		}
+
+		return start.Add(introTotal)
+	}
+
+	if total <= 0 {
+		return t.Add(time.Minute)
+	}
+
+	loopElapsed := elapsed - introTotal
+
+	cycleBase := loopElapsed - loopElapsed%total
+
+	offset := loopElapsed % total
 
 	stepStart := time.Duration(0)
 
@@ -108,13 +185,13 @@ func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
 		nextTick := (offset/step.Refresh + 1) * step.Refresh
 
 		if nextTick < step.Duration {
-			return start.Add(cycleBase + stepStart + nextTick)
+			return start.Add(introTotal + cycleBase + stepStart + nextTick)
 		}
 
-		return start.Add(cycleBase + stepStart + step.Duration)
+		return start.Add(introTotal + cycleBase + stepStart + step.Duration)
 	}
 
-	return start.Add(cycleBase + total)
+	return start.Add(introTotal + cycleBase + total)
 }
 
 func (tl *Timeline) validate() error {
@@ -122,36 +199,36 @@ func (tl *Timeline) validate() error {
 		return fmt.Errorf("board timeline is empty")
 	}
 
-	for i, step := range tl.Steps {
-		if step.Duration < time.Second {
-			return fmt.Errorf(
-				"timeline step %d (%s) duration %s is below 1s",
-				i,
-				step.Panel,
-				step.Duration,
-			)
-		}
+	for _, steps := range [][]TimelineStep{tl.Intro, tl.Steps} {
+		for i, step := range steps {
+			if step.Duration < time.Second {
+				return fmt.Errorf(
+					"timeline step %d (%s) duration %s is below 1s",
+					i,
+					step.Panel,
+					step.Duration,
+				)
+			}
 
-		if step.Refresh < timelineRefreshFloor {
-			return fmt.Errorf(
-				"timeline step %d (%s) refresh %s is below %s",
-				i,
-				step.Panel,
-				step.Refresh,
-				timelineRefreshFloor,
-			)
-		}
-	}
+			if step.Refresh < timelineRefreshFloor {
+				return fmt.Errorf(
+					"timeline step %d (%s) refresh %s is below %s",
+					i,
+					step.Panel,
+					step.Refresh,
+					timelineRefreshFloor,
+				)
+			}
 
-	for i, step := range tl.Steps {
-		if step.Refresh > step.Duration {
-			return fmt.Errorf(
-				"timeline step %d (%s) refresh %s exceeds duration %s",
-				i,
-				step.Panel,
-				step.Refresh,
-				step.Duration,
-			)
+			if step.Refresh > step.Duration {
+				return fmt.Errorf(
+					"timeline step %d (%s) refresh %s exceeds duration %s",
+					i,
+					step.Panel,
+					step.Refresh,
+					step.Duration,
+				)
+			}
 		}
 	}
 
@@ -185,11 +262,13 @@ type TimelineCatalog struct {
 	views   map[display.Panel]TimelineStep
 	presets map[string][]string
 	order   []string
+	intro   []string
 }
 
 type timelineFile struct {
 	Views   yaml.Node            `yaml:"views"`
 	Order   yaml.Node            `yaml:"order"`
+	Intro   yaml.Node            `yaml:"intro"`
 	Presets map[string]yaml.Node `yaml:"presets"`
 }
 
@@ -238,6 +317,13 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 
 	catalog.order = order
 
+	intro, err := catalog.decodeIntro(&file.Intro)
+	if err != nil {
+		return nil, err
+	}
+
+	catalog.intro = intro
+
 	if err := catalog.validateNames(); err != nil {
 		return nil, err
 	}
@@ -248,6 +334,10 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 func (c *TimelineCatalog) validateNames() error {
 	if _, err := c.resolveNames(c.order); err != nil {
 		return fmt.Errorf("order: %w", err)
+	}
+
+	if _, err := c.resolveNames(c.intro); err != nil {
+		return fmt.Errorf("intro: %w", err)
 	}
 
 	names := make([]string, 0, len(c.presets))
@@ -328,6 +418,36 @@ func (c *TimelineCatalog) decodeOrder(node *yaml.Node) ([]string, error) {
 	}
 
 	return decodeViewList(node)
+}
+
+func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]string, error) {
+	if node == nil || node.Kind == 0 {
+		return nil, nil
+	}
+
+	if node.Kind == yaml.ScalarNode {
+		if node.Tag == "!!null" || strings.TrimSpace(node.Value) == "" {
+			return nil, nil
+		}
+
+		preset, err := c.preset(strings.TrimSpace(node.Value))
+		if err != nil {
+			return nil, fmt.Errorf("intro: %w", err)
+		}
+
+		return append([]string(nil), preset...), nil
+	}
+
+	if node.Kind == yaml.SequenceNode && len(node.Content) == 0 {
+		return nil, nil
+	}
+
+	views, err := decodeViewList(node)
+	if err != nil {
+		return nil, fmt.Errorf("intro: %w", err)
+	}
+
+	return views, nil
 }
 
 func (c *TimelineCatalog) preset(name string) ([]string, error) {
@@ -494,26 +614,8 @@ func (c *TimelineCatalog) applyViewSettings(name string, node *yaml.Node) error 
 	return nil
 }
 
-func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
-	var names []string
-
-	trimmed := strings.TrimSpace(order)
-
-	switch {
-	case trimmed == "":
-		names = c.order
-	case !strings.ContainsAny(trimmed, ",."):
-		preset, err := c.preset(trimmed)
-		if err != nil {
-			return nil, err
-		}
-
-		names = preset
-	default:
-		names = strings.Split(trimmed, ",")
-	}
-
-	timeline := &Timeline{}
+func (c *TimelineCatalog) stepsForNames(names []string) ([]TimelineStep, error) {
+	steps := make([]TimelineStep, 0, len(names))
 
 	for _, name := range names {
 		panel, err := panelForViewName(name)
@@ -528,18 +630,89 @@ func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
 			settings = TimelineStep{Duration: duration, Refresh: refresh}
 		}
 
-		timeline.Steps = append(timeline.Steps, TimelineStep{
+		steps = append(steps, TimelineStep{
 			Panel:    panel,
 			Duration: settings.Duration,
 			Refresh:  settings.Refresh,
 		})
 	}
 
+	return steps, nil
+}
+
+func (c *TimelineCatalog) orderNames(order string) ([]string, error) {
+	trimmed := strings.TrimSpace(order)
+
+	switch {
+	case trimmed == "":
+		return c.order, nil
+	case !strings.ContainsAny(trimmed, ",."):
+		return c.preset(trimmed)
+	default:
+		return strings.Split(trimmed, ","), nil
+	}
+}
+
+func (c *TimelineCatalog) introFromExpression(expr string) ([]string, error) {
+	trimmed := strings.TrimSpace(expr)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	if !strings.Contains(trimmed, ",") {
+		if entries, ok := c.presets[trimmed]; ok {
+			return append([]string(nil), entries...), nil
+		}
+	}
+
+	return normalizeViewList(strings.Split(trimmed, ","))
+}
+
+func (c *TimelineCatalog) build(orderNames, introNames []string) (*Timeline, error) {
+	timeline := &Timeline{}
+
+	introSteps, err := c.stepsForNames(introNames)
+	if err != nil {
+		return nil, fmt.Errorf("intro: %w", err)
+	}
+
+	timeline.Intro = introSteps
+
+	loopSteps, err := c.stepsForNames(orderNames)
+	if err != nil {
+		return nil, err
+	}
+
+	timeline.Steps = loopSteps
+
 	if err := timeline.validate(); err != nil {
 		return nil, err
 	}
 
 	return timeline, nil
+}
+
+func (c *TimelineCatalog) Resolve(order string) (*Timeline, error) {
+	names, err := c.orderNames(order)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.build(names, c.intro)
+}
+
+func (c *TimelineCatalog) ResolveForCast(order, intro string) (*Timeline, error) {
+	names, err := c.orderNames(order)
+	if err != nil {
+		return nil, err
+	}
+
+	introNames, err := c.introFromExpression(intro)
+	if err != nil {
+		return nil, fmt.Errorf("board intro %q: %w", intro, err)
+	}
+
+	return c.build(names, introNames)
 }
 
 func OpenBoardTimeline(

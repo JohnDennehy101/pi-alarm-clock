@@ -40,6 +40,8 @@ func TestChromecastRepoRoundTrip(t *testing.T) {
 			DeviceID:               "cast-uuid",
 			DisplayOffsetMinutes:   7,
 			DisplayDurationMinutes: 90,
+			BoardTimeline:          "bus-focus",
+			BoardIntro:             "weather",
 		},
 	}
 
@@ -58,6 +60,7 @@ func TestChromecastRepoRoundTrip(t *testing.T) {
 
 	got.Chromecast.DisplayDurationMinutes = 30
 	got.Chromecast.DisplayOffsetMinutes = 15
+	got.Chromecast.BoardIntro = "weather,bus.map"
 	got.Hue.StartOffsetMinutes = 3
 
 	if err := db.AlarmRepository.Update(ctx, got); err != nil {
@@ -72,6 +75,8 @@ func TestChromecastRepoRoundTrip(t *testing.T) {
 	if updated.Chromecast.DisplayDurationMinutes != 30 ||
 		updated.Chromecast.DisplayOffsetMinutes != 15 ||
 		updated.Chromecast.DeviceID != "cast-uuid" ||
+		updated.Chromecast.BoardTimeline != "bus-focus" ||
+		updated.Chromecast.BoardIntro != "weather,bus.map" ||
 		!updated.Chromecast.Enabled {
 		t.Fatalf("update chromecast mismatch: %+v", updated.Chromecast)
 	}

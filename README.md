@@ -78,6 +78,9 @@ views:
 order: interleaved      # preset name, or a list:
 # order: [weather, bus.map, bus.schedule, bus.progress]
 
+intro: [weather]       # one-shot intro before the loop (preview /
+                       # default-timeline renders; optional)
+
 presets:                # user-defined order presets
   morning: [bus.map, weather, bus.map, bus.progress, weather]
 ```
@@ -88,11 +91,22 @@ Durations and refreshes are optional (defaults: 2m on screen, 1m
 refresh, progress 25s); refresh has a 10s floor and may not exceed the
 view's duration.
 
-Per-alarm selection is part of each alarm's Chromecast settings
-(`boardTimeline`): empty uses the global default order, a preset name
-selects that preset, and a comma-separated view list is a one-off
-order. An invalid order falls back to the default at fire time (logged)
-so the alarm still shows a board.
+Board sessions can open with an optional one-shot intro: the listed
+views play once (each view's configured duration/refresh), then the
+loop takes over and runs until the display window closes. The intro
+plays once per board session start, never inside the loop. For
+alarm-triggered boards the intro is opt-in per alarm; the `intro:`
+setting above applies to default timeline renders (e.g. the preview
+command).
+
+Per-alarm selection is part of each alarm's Chromecast settings:
+`boardTimeline` selects the loop (empty uses the global default order,
+a preset name selects that preset, and a comma-separated view list is a
+one-off order), and `boardIntro` opts this alarm in to playing an
+intro first (empty means no intro; same expression forms). Invalid
+expressions fall back — a bad intro is dropped, a bad order falls back
+to the default at fire time (logged) — so the alarm still shows a
+board.
 
 When no `board-timeline.yml` exists, the legacy `BOARD_SCHEDULE` env
 (with the nested `bus:{...}` group syntax) still configures the

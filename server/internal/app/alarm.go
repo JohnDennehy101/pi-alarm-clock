@@ -293,5 +293,13 @@ func validateChromecast(settings alarm.ChromecastSettings) error {
 		return fmt.Errorf("Chromecast board timeline must be a single value")
 	}
 
+	if len(settings.BoardIntro) > 200 {
+		return fmt.Errorf("Chromecast board intro is too long")
+	}
+
+	if strings.ContainsAny(settings.BoardIntro, "\n\r") {
+		return fmt.Errorf("Chromecast board intro must be a single value")
+	}
+
 	return nil
 }

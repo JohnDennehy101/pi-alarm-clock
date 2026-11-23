@@ -10,4 +10,6 @@ type ChromecastSettings struct {
 	DisplayDurationMinutes int `json:"displayDurationMinutes"`
 
 	BoardTimeline string `json:"boardTimeline,omitempty"`
+
+	BoardIntro string `json:"boardIntro,omitempty"`
 }

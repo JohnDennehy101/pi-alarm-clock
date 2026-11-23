@@ -205,14 +205,16 @@ type BoardService struct {
 	boardsRoot string
 	baseURL    string
 
-	timetable *bus.Timetable
-	realtime  *BusRealtimeService
-	timeline  *Timeline
-	catalog   *TimelineCatalog
+	timetable    *bus.Timetable
+	realtime     *BusRealtimeService
+	timeline     *Timeline
+	catalog      *TimelineCatalog
+	timelinePath string
 }
 
 type BoardProvider interface {
 	ResolveTimeline(order string) (*Timeline, error)
+	ResolveTimelineForCast(order, intro string) (*Timeline, error)
 	BoardURLForTimeline(
 		ctx context.Context,
 		sessionStart time.Time,
@@ -228,26 +230,53 @@ func NewBoardService(
 	realtime *BusRealtimeService,
 	timeline *Timeline,
 	catalog *TimelineCatalog,
+	timelinePath string,
 ) *BoardService {
 	if timeline == nil {
 		timeline, _ = DefaultTimelineCatalog().Resolve("")
 	}
 
 	return &BoardService{
-		boardsRoot: boardsRoot,
-		timetable:  timetable,
-		realtime:   realtime,
-		timeline:   timeline,
-		catalog:    catalog,
+		boardsRoot:   boardsRoot,
+		timetable:    timetable,
+		realtime:     realtime,
+		timeline:     timeline,
+		catalog:      catalog,
+		timelinePath: timelinePath,
 	}
 }
 
 func (b *BoardService) ResolveTimeline(order string) (*Timeline, error) {
-	if strings.TrimSpace(order) == "" || b.catalog == nil {
-		return b.timeline, nil
+	b.mu.Lock()
+	catalog := b.catalog
+	timeline := b.timeline
+	b.mu.Unlock()
+
+	if strings.TrimSpace(order) == "" || catalog == nil {
+		return timeline, nil
 	}
 
-	return b.catalog.Resolve(order)
+	return catalog.Resolve(order)
+}
+
+func (b *BoardService) ResolveTimelineForCast(order, intro string) (*Timeline, error) {
+	b.mu.Lock()
+	catalog := b.catalog
+	timeline := b.timeline
+	b.mu.Unlock()
+
+	order = strings.TrimSpace(order)
+	intro = strings.TrimSpace(intro)
+
+	if catalog == nil {
+		if order == "" && intro == "" {
+			return timeline, nil
+		}
+
+		catalog = DefaultTimelineCatalog()
+	}
+
+	return catalog.ResolveForCast(order, intro)
 }
 
 func (b *BoardService) setRenderer(renderer *display.BoardRenderer) {
@@ -312,7 +341,9 @@ func (b *BoardService) BoardURLForTimeline(
 	}
 
 	if timeline == nil {
+		b.mu.Lock()
 		timeline = b.timeline
+		b.mu.Unlock()
 	}
 
 	renderTime = renderTime.Truncate(time.Second)

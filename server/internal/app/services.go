@@ -63,6 +63,7 @@ func NewServices(
 			NewBusRealtimeService(realtimeClient),
 			boardTimeline,
 			boardCatalog,
+			filepath.Join(dataDir, "board-timeline.yml"),
 		),
 		Weather: NewWeatherService(weatherLatitude, weatherLongitude),
 		Alarm:   NewAlarmService(alarmRepository),

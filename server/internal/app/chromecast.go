@@ -166,8 +166,9 @@ func (s *ChromecastService) CastBoard(
 	windowMinutes int,
 	stopNumber string,
 	order string,
+	intro string,
 ) error {
-	timeline, err := s.timelineFor(order)
+	timeline, err := s.timelineFor(order, intro)
 	if err != nil {
 		return err
 	}
@@ -215,18 +216,31 @@ func (s *ChromecastService) RunBoardCast(
 	windowMinutes int,
 	stopNumber string,
 	order string,
+	intro string,
 ) error {
 	if windowMinutes <= 0 {
 		windowMinutes = chromecastDefaultDisplayDurationMinutes
 	}
 
-	timeline, err := s.timelineFor(order)
+	timeline, err := s.timelineFor(order, intro)
 	if err != nil {
-		log.Printf("Chromecast: board timeline %q invalid, using default: %v", order, err)
+		log.Printf(
+			"Chromecast: board timeline %q or intro %q invalid, adapting: %v",
+			order,
+			intro,
+			err,
+		)
 
-		timeline, err = s.timelineFor("")
-		if err != nil {
-			return err
+		if timeline, err = s.timelineFor(order, ""); err != nil {
+			log.Printf(
+				"Chromecast: board timeline %q invalid, using default: %v",
+				order,
+				err,
+			)
+
+			if timeline, err = s.timelineFor("", ""); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -255,7 +269,7 @@ func (s *ChromecastService) RunBoardCast(
 	)
 }
 
-func (s *ChromecastService) timelineFor(order string) (*Timeline, error) {
+func (s *ChromecastService) timelineFor(order, intro string) (*Timeline, error) {
 	s.mu.Lock()
 	provider := s.boardProvider
 	s.mu.Unlock()
@@ -264,7 +278,7 @@ func (s *ChromecastService) timelineFor(order string) (*Timeline, error) {
 		return nil, fmt.Errorf("board provider is not configured")
 	}
 
-	return provider.ResolveTimeline(order)
+	return provider.ResolveTimelineForCast(order, intro)
 }
 
 func (s *ChromecastService) refreshBoardCast(
