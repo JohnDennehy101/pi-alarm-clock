@@ -76,8 +76,6 @@ func normalizePresetName(name string) (string, error) {
 	return normalized, nil
 }
 
-// entriesFromStrings parses view reference strings ("weather",
-// "bus.map", "bus.map:30s:10s") into view entries.
 func entriesFromStrings(values []string) ([]viewEntry, error) {
 	entries := make([]viewEntry, 0, len(values))
 
@@ -436,12 +434,6 @@ func viewPairNode(name string, value *yaml.Node) *yaml.Node {
 	return node
 }
 
-// entryNode renders one view entry for an order/intro/preset sequence:
-//   - "weather"                            -> - weather
-//   - "bus.schedule"                       -> - bus: schedule
-//   - "weather" with duration 3m           -> - weather: {duration: 3m}
-//   - "bus.schedule" with duration 3m, 15s -> - bus:
-//     schedule: {duration: 3m, refresh: 15s}
 func entryNode(entry viewEntry) (*yaml.Node, error) {
 	canonical, err := entry.Canonical()
 	if err != nil {
@@ -469,8 +461,6 @@ func entryNode(entry viewEntry) (*yaml.Node, error) {
 	return viewPairNode(canonical.Name, settings), nil
 }
 
-// viewsNode serializes the per-view settings, grouping views that share a
-// prefix (bus.map, bus.schedule, bus.progress) under a parent key.
 func viewsNode(c *TimelineCatalog) *yaml.Node {
 	views := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 

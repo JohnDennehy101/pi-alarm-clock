@@ -22,8 +22,6 @@ type TimelineStep struct {
 	Refresh  time.Duration
 }
 
-// viewEntry is one view reference in an order, intro or preset list. The
-// optional duration and refresh override the per-view defaults from views:.
 type viewEntry struct {
 	Name     string
 	Duration *time.Duration
@@ -34,8 +32,6 @@ func (e viewEntry) HasOverrides() bool {
 	return e.Duration != nil || e.Refresh != nil
 }
 
-// canonical resolves the entry's name to its canonical view name, keeping
-// any duration/refresh overrides.
 func (e viewEntry) Canonical() (viewEntry, error) {
 	panel, err := panelForViewName(e.Name)
 	if err != nil {
@@ -49,8 +45,6 @@ func (e viewEntry) Canonical() (viewEntry, error) {
 	}, nil
 }
 
-// String renders the single-line expression form used by the alarm
-// board_timeline/board_intro columns: view[:duration[:refresh]].
 func (e viewEntry) String() string {
 	rendered := e.Name
 
@@ -65,8 +59,6 @@ func (e viewEntry) String() string {
 	return rendered
 }
 
-// parseViewExpression parses a single-line view reference of the form
-// view[:duration[:refresh]], e.g. "bus.map:30s:10s".
 func parseViewExpression(value string) (viewEntry, error) {
 	trimmed := strings.TrimSpace(value)
 	parts := strings.Split(trimmed, ":")
