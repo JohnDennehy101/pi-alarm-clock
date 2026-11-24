@@ -53,6 +53,16 @@ func NewRouter(services *app.Services, devices *auth.Store, pairing *PairingHand
 	mux.HandleFunc("PUT /api/v1/audio/volume", a.setVolume)
 	mux.HandleFunc("GET /api/v1/audio/radio-stations", a.getRadioStations)
 
+	mux.HandleFunc("GET /api/v1/board/timeline", a.getBoardTimeline)
+	mux.HandleFunc("PUT /api/v1/board/timeline/views/{view}", a.updateBoardTimelineView)
+	mux.HandleFunc("PUT /api/v1/board/timeline/order", a.setBoardTimelineOrder)
+	mux.HandleFunc("PUT /api/v1/board/timeline/intro", a.setBoardTimelineIntro)
+	mux.HandleFunc("GET /api/v1/board/timeline/presets", a.listBoardTimelinePresets)
+	mux.HandleFunc("POST /api/v1/board/timeline/presets", a.createBoardTimelinePreset)
+	mux.HandleFunc("GET /api/v1/board/timeline/presets/{name}", a.getBoardTimelinePreset)
+	mux.HandleFunc("PUT /api/v1/board/timeline/presets/{name}", a.updateBoardTimelinePreset)
+	mux.HandleFunc("DELETE /api/v1/board/timeline/presets/{name}", a.deleteBoardTimelinePreset)
+
 	mux.HandleFunc("GET /api/v1/alarms", a.listAlarms)
 	mux.HandleFunc("POST /api/v1/alarms", a.createAlarm)
 	mux.HandleFunc("GET /api/v1/alarms/{id}", a.getAlarm)

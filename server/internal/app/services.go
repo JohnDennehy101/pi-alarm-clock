@@ -23,48 +23,77 @@ type Services struct {
 	Executor   *AlarmExecutor
 }
 
+type DeviceConfig struct {
+	SonosEnabled      bool
+	HueAPIKey         string
+	ChromecastEnabled bool
+}
+
+type LocationConfig struct {
+	Latitude  float64
+	Longitude float64
+}
+
+type BusBoardConfig struct {
+	Timetable         *bus.Timetable
+	StopNumber        string
+	RealtimeURL       string
+	RealtimeAPIKey    string
+	BoardScheduleSpec string
+	BasemapProvider   display.BasemapProvider
+}
+
+type ServicesConfig struct {
+	DataDir         string
+	MediaPort       int
+	AlarmRepository alarm.Repository
+	Devices         DeviceConfig
+	Location        LocationConfig
+	BusBoard        BusBoardConfig
+}
+
 func NewServices(
 	ctx context.Context,
-	mediaPort int,
-	hueAPIKey string,
-	sonosEnabled bool,
-	chromecastEnabled bool,
-	weatherLatitude float64,
-	weatherLongitude float64,
-	dataDir string,
-	alarmRepository alarm.Repository,
-	timetable *bus.Timetable,
-	busStopNumber string,
-	busRealtimeURL string,
-	busRealtimeAPIKey string,
-	boardScheduleSpec string,
-	basemapProvider display.BasemapProvider,
+	cfg ServicesConfig,
 ) (*Services, error) {
-	boardSchedule, err := ParseBoardSchedule(boardScheduleSpec)
-	if err != nil {
-		return nil, fmt.Errorf("parsing board schedule: %w", err)
+	var realtimeClient *bus.RealtimeClient
+	if cfg.BusBoard.RealtimeAPIKey != "" {
+		realtimeClient = bus.NewRealtimeClient(
+			cfg.BusBoard.RealtimeURL,
+			cfg.BusBoard.RealtimeAPIKey,
+		)
 	}
 
-	var realtimeClient *bus.RealtimeClient
-	if busRealtimeAPIKey != "" {
-		realtimeClient = bus.NewRealtimeClient(busRealtimeURL, busRealtimeAPIKey)
+	boardTimeline, boardCatalog, err := OpenBoardTimeline(
+		cfg.DataDir,
+		cfg.BusBoard.BoardScheduleSpec,
+	)
+	if err != nil {
+		log.Printf("Board timeline config invalid, using built-in default: %v", err)
+
+		boardTimeline = nil
+		boardCatalog = nil
 	}
 
 	services := &Services{
-		Sonos:      NewSonosService(filepath.Join(dataDir, "sonos.json")),
-		Hue:        NewHueService(hueAPIKey),
-		Chromecast: NewChromecastService(filepath.Join(dataDir, "chromecast.json")),
+		Sonos:      NewSonosService(filepath.Join(cfg.DataDir, "sonos.json")),
+		Hue:        NewHueService(cfg.Devices.HueAPIKey),
+		Chromecast: NewChromecastService(filepath.Join(cfg.DataDir, "chromecast.json")),
 		Board: NewBoardService(
-			filepath.Join(dataDir, "boards"),
-			timetable,
+			filepath.Join(cfg.DataDir, "boards"),
+			cfg.BusBoard.Timetable,
 			NewBusRealtimeService(realtimeClient),
-			boardSchedule,
+			BoardTimelineConfig{
+				Timeline:     boardTimeline,
+				Catalog:      boardCatalog,
+				TimelinePath: filepath.Join(cfg.DataDir, "board-timeline.yml"),
+			},
 		),
-		Weather: NewWeatherService(weatherLatitude, weatherLongitude),
-		Alarm:   NewAlarmService(alarmRepository),
+		Weather: NewWeatherService(cfg.Location.Latitude, cfg.Location.Longitude),
+		Alarm:   NewAlarmService(cfg.AlarmRepository),
 	}
 
-	services.Chromecast.setBusStopNumber(busStopNumber)
+	services.Chromecast.setBusStopNumber(cfg.BusBoard.StopNumber)
 
 	services.Executor = NewAlarmExecutor(
 		services.Sonos,
@@ -72,11 +101,11 @@ func NewServices(
 		services.Chromecast,
 	)
 
-	services.initMedia(mediaPort, services.Weather, basemapProvider)
-	services.initBoardURL(mediaPort)
-	services.initSonos(ctx, sonosEnabled)
-	services.initHue(ctx, hueAPIKey)
-	services.initChromecast(ctx, chromecastEnabled)
+	services.initMedia(cfg.MediaPort, services.Weather, cfg.BusBoard.BasemapProvider)
+	services.initBoardURL(cfg.MediaPort)
+	services.initSonos(ctx, cfg.Devices.SonosEnabled)
+	services.initHue(ctx, cfg.Devices.HueAPIKey)
+	services.initChromecast(ctx, cfg.Devices.ChromecastEnabled)
 
 	return services, nil
 }

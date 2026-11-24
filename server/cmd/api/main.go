@@ -79,20 +79,28 @@ func newApplication(ctx context.Context, cfg *config.Config) (*application, erro
 	}
 	services, err := app.NewServices(
 		ctx,
-		cfg.MediaPort,
-		cfg.HueAPIKey,
-		cfg.SonosEnabled,
-		cfg.ChromecastEnabled,
-		cfg.WeatherLatitude,
-		cfg.WeatherLongitude,
-		cfg.DataDir,
-		db.AlarmRepository,
-		timetable,
-		cfg.BusStopNumber,
-		cfg.BusRealtimeURL,
-		cfg.BusRealtimeAPIKey,
-		cfg.BoardSchedule,
-		newBasemapProvider(cfg),
+		app.ServicesConfig{
+			DataDir:         cfg.DataDir,
+			MediaPort:       cfg.MediaPort,
+			AlarmRepository: db.AlarmRepository,
+			Devices: app.DeviceConfig{
+				SonosEnabled:      cfg.SonosEnabled,
+				HueAPIKey:         cfg.HueAPIKey,
+				ChromecastEnabled: cfg.ChromecastEnabled,
+			},
+			Location: app.LocationConfig{
+				Latitude:  cfg.WeatherLatitude,
+				Longitude: cfg.WeatherLongitude,
+			},
+			BusBoard: app.BusBoardConfig{
+				Timetable:         timetable,
+				StopNumber:        cfg.BusStopNumber,
+				RealtimeURL:       cfg.BusRealtimeURL,
+				RealtimeAPIKey:    cfg.BusRealtimeAPIKey,
+				BoardScheduleSpec: cfg.BoardSchedule,
+				BasemapProvider:   newBasemapProvider(cfg),
+			},
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initialising services: %w", err)

@@ -1,0 +1,2 @@
+ALTER TABLE alarms
+    ADD COLUMN board_intro TEXT NOT NULL DEFAULT '';

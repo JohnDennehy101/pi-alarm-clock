@@ -27,18 +27,23 @@ func main() {
 		"",
 		"bus stop number (defaults to BUS_STOP_NUMBER)",
 	)
+	order := flag.String(
+		"order",
+		"",
+		"board timeline to render: preset name or comma-separated view list",
+	)
 	flag.Parse()
 
 	if *minutes < 1 {
 		log.Fatalf("-minutes must be at least 1")
 	}
 
-	if err := run(*minutes, *stop); err != nil {
+	if err := run(*minutes, *stop, *order); err != nil {
 		log.Fatalf("board preview failed: %v", err)
 	}
 }
 
-func run(minutes int, stop string) error {
+func run(minutes int, stop string, order string) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("loading configuration: %w", err)
@@ -48,16 +53,31 @@ func run(minutes int, stop string) error {
 		stop = cfg.BusStopNumber
 	}
 
-	schedule, err := app.ParseBoardSchedule(cfg.BoardSchedule)
-	if err != nil {
-		return fmt.Errorf("parsing board schedule: %w", err)
-	}
-
 	ctx := context.Background()
 
 	timetable, err := loadTimetable(ctx, cfg.DataDir, stop)
 	if err != nil {
 		log.Printf("Bus timetable unavailable: %v", err)
+	}
+
+	timeline, catalog, err := app.OpenBoardTimeline(cfg.DataDir, cfg.BoardSchedule)
+	if err != nil {
+		log.Printf("Board timeline config invalid, using built-in default: %v", err)
+
+		timeline, catalog = nil, nil
+	}
+
+	if order != "" {
+		if catalog == nil {
+			catalog = app.DefaultTimelineCatalog()
+		}
+
+		resolved, err := catalog.Resolve(order)
+		if err != nil {
+			return fmt.Errorf("resolving -order: %w", err)
+		}
+
+		timeline = resolved
 	}
 
 	if stop == "" {
@@ -70,7 +90,11 @@ func run(minutes int, stop string) error {
 		boardsRoot,
 		timetable,
 		app.NewBusRealtimeService(realtimeClient(cfg)),
-		schedule,
+		app.BoardTimelineConfig{
+			Timeline:     timeline,
+			Catalog:      catalog,
+			TimelinePath: filepath.Join(cfg.DataDir, "board-timeline.yml"),
+		},
 	)
 
 	var basemapProvider display.BasemapProvider
@@ -95,30 +119,34 @@ func run(minutes int, stop string) error {
 	// Chromecast; nothing fetches it here.
 	board.Configure(renderer, "http://preview.invalid/display/boards")
 
+	if timeline == nil {
+		timeline, _ = app.DefaultTimelineCatalog().Resolve("")
+	}
+
 	start := time.Now().Truncate(time.Minute)
+	end := start.Add(time.Duration(minutes) * time.Minute)
 
 	fmt.Printf("Rendering %d minutes to %s\n", minutes, boardsRoot)
 
-	for minute := 0; minute < minutes; minute++ {
-		renderTime := start.Add(time.Duration(minute) * time.Minute)
+	renderAt := start
+	for renderAt.Before(end) {
+		slot := timeline.At(start, renderAt)
 
-		_, err := board.BoardURL(
-			ctx,
-			start,
-			renderTime,
-			stop,
-		)
+		_, err := board.BoardURL(ctx, start, renderAt, stop)
 		if err != nil {
-			log.Printf("Rendering minute %d failed: %v", minute, err)
-			continue
+			log.Printf("Rendering frame at %s failed: %v", renderAt.Format("15:04:05"), err)
+		} else {
+			fmt.Printf(
+				"  frame-%d.png  %s  panel=%s  step=%d  tick=%d\n",
+				renderAt.Unix(),
+				renderAt.Format("15:04:05"),
+				slot.Panel,
+				slot.Step,
+				slot.Tick,
+			)
 		}
 
-		fmt.Printf(
-			"  minute-%02d.png  %s  panel=%s\n",
-			minute,
-			renderTime.Format("15:04"),
-			schedule.PanelAt(minute),
-		)
+		renderAt = timeline.NextBoundary(start, renderAt)
 	}
 
 	session := start.Format("20060102T1504")

@@ -27,16 +27,25 @@ macOS firewall.
 ## Board preview (dev)
 
 To test dashboard/board PNG rendering without casting to a Chromecast
-device, run the preview command. It writes one PNG per minute — the
-same sequence the alarm flow would cast — to `data/boards/<session>/`:
-each minute reflects the `BOARD_SCHEDULE` rotation (timetable, bus
-position map, per-bus tracking progress, weather), so bus due times
-count down, map positions advance, and the progress view's bus rotates
-across the approaching fleet:
+device, run the preview command. It writes one PNG per board change —
+the same sequence the alarm flow would cast — to
+`data/boards/<session>/`: each frame walks the board timeline
+(timetable, bus position map, per-bus tracking progress, weather), so
+bus due times count down, map positions advance, and the progress
+view's bus rotates across the approaching fleet:
 
 ```bash
 cd server
-go run ./cmd/dashboard/preview -minutes 25        # optional: -stop <number>
+go run ./cmd/dashboard/preview -minutes 25        # optional: -stop <number>, -order <preset|list>
+```
+
+`-minutes` renders a wall-clock window, so at a 25-second refresh
+cadence it writes many frames per minute. `-order` previews the same
+preset or view list an alarm would use:
+
+```bash
+go run ./cmd/dashboard/preview -minutes 10 -order interleaved
+go run ./cmd/dashboard/preview -minutes 10 -order "weather,bus.map,bus.progress"
 ```
 
 It loads `.env` and the bus timetable exactly like the API. The first
@@ -44,16 +53,90 @@ run parses the GTFS dataset and writes the binary timetable cache
 (`data/bus/timetable.cache`); later runs mmap that cache and start in
 under a second. By design it never contacts any Chromecast device.
 
-### Board schedule
+### Board timeline
 
-`BOARD_SCHEDULE` rotates panels on the alarm display. A bus panel's
-time can be split between views with a nested group: the timetable
-view (`schedule`), the live bus position map (`map`), and the per-bus
-tracking progress view (`progress`):
+The board casts a looping timeline of views, each with a screen
+duration and a refresh cadence (how often that view re-renders, e.g.
+the progress view rotating to the next bus every 25 seconds). The
+timeline lives in `data/board-timeline.yml`:
+
+```yaml
+views:
+  weather:
+    duration: 2m
+    refresh: 1m
+  bus:
+    map:
+      duration: 3m
+      refresh: 30s      # re-render positions and due labels
+    schedule:
+      duration: 2m
+    progress:
+      duration: 2m
+      refresh: 25s      # rotate to the next approaching bus
+
+order: interleaved      # preset name, or a list:
+# order:
+#   - weather
+#   - bus: schedule
+
+intro:
+  - weather             # one-shot intro before the loop (preview /
+                        # default-timeline renders; optional)
+
+presets:                # user-defined order presets
+  morning:
+    - bus: map
+    - weather
+```
+
+Order, intro and preset entries may each carry their own duration and
+refresh, overriding `views:` for that entry only:
+
+```yaml
+order:
+  - weather
+  - bus: schedule
+  - bus:
+      map:
+        duration: 45s    # shorter map stint, refresh falls back to views
+        refresh: 15s
+```
+
+(The dotted form `bus.map` is still accepted in files and expressions,
+but the grouped form is what the server writes back.)
+
+Built-in presets: `default`, `interleaved` (weather woven between bus
+views), `bus-focus`. User presets override views on the same name.
+Durations and refreshes are optional (defaults: 2m on screen, 1m
+refresh, progress 25s); refresh has a 10s floor and may not exceed the
+view's duration.
+
+Board sessions can open with an optional one-shot intro: the listed
+views play once (each view's configured duration/refresh), then the
+loop takes over and runs until the display window closes. The intro
+plays once per board session start, never inside the loop. For
+alarm-triggered boards the intro is opt-in per alarm; the `intro:`
+setting above applies to default timeline renders (e.g. the preview
+command).
+
+Per-alarm selection is part of each alarm's Chromecast settings:
+`boardTimeline` selects the loop (empty uses the global default order,
+a preset name selects that preset, and a comma-separated view list is a
+one-off order) and supports the compact per-entry form
+`weather:2m,bus.map:30s:10s` (view[:duration[:refresh]]), so a single
+alarm can pin its own cadence without touching the YAML. `boardIntro`
+opts this alarm in to playing an intro first (empty means no intro;
+same expression forms). Invalid expressions fall back — a bad intro
+is dropped, a bad order falls back to the default at fire time
+(logged) — so the alarm still shows a board.
+
+When no `board-timeline.yml` exists, the legacy `BOARD_SCHEDULE` env
+(with the nested `bus:{...}` group syntax) still configures the
+rotation, refreshing once per minute:
 
 ```
 BOARD_SCHEDULE="bus:{map:2,schedule:2,progress:3},weather:1"
-BOARD_SCHEDULE="bus:5,weather:1"                   # shorthand: all bus time on the timetable
 ```
 
 The map view shows buses approaching the configured stop within ~15

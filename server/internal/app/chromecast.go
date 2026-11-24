@@ -17,13 +17,8 @@ import (
 
 const (
 	chromecastDefaultDisplayDurationMinutes = 60
-
-	// loadRetries bounds how often a board load is attempted; the first
-	// load after a TV wakes from standby often exceeds the cast
-	// protocol's short launch timeout, but succeeds on the follow-up.
-	loadRetries = 2
-
-	loadRetryDelay = 5 * time.Second
+	loadRetries                             = 2
+	loadRetryDelay                          = 5 * time.Second
 )
 
 type ChromecastStatus struct {
@@ -170,14 +165,21 @@ func (s *ChromecastService) CastBoard(
 	deviceID string,
 	windowMinutes int,
 	stopNumber string,
+	order string,
+	intro string,
 ) error {
+	timeline, err := s.timelineFor(order, intro)
+	if err != nil {
+		return err
+	}
+
 	if windowMinutes <= 0 {
 		windowMinutes = 1
 	}
 
 	start := time.Now().Truncate(time.Minute)
 
-	firstURL, err := s.boardURL(ctx, start, start, stopNumber)
+	firstURL, err := s.boardURL(ctx, start, start, stopNumber, timeline)
 	if err != nil {
 		return err
 	}
@@ -201,6 +203,7 @@ func (s *ChromecastService) CastBoard(
 			start,
 			windowMinutes,
 			stopNumber,
+			timeline,
 		)
 	}()
 
@@ -212,14 +215,38 @@ func (s *ChromecastService) RunBoardCast(
 	deviceID string,
 	windowMinutes int,
 	stopNumber string,
+	order string,
+	intro string,
 ) error {
 	if windowMinutes <= 0 {
 		windowMinutes = chromecastDefaultDisplayDurationMinutes
 	}
 
+	timeline, err := s.timelineFor(order, intro)
+	if err != nil {
+		log.Printf(
+			"Chromecast: board timeline %q or intro %q invalid, adapting: %v",
+			order,
+			intro,
+			err,
+		)
+
+		if timeline, err = s.timelineFor(order, ""); err != nil {
+			log.Printf(
+				"Chromecast: board timeline %q invalid, using default: %v",
+				order,
+				err,
+			)
+
+			if timeline, err = s.timelineFor("", ""); err != nil {
+				return err
+			}
+		}
+	}
+
 	start := time.Now().Truncate(time.Minute)
 
-	firstURL, err := s.boardURL(ctx, start, start, stopNumber)
+	firstURL, err := s.boardURL(ctx, start, start, stopNumber, timeline)
 	if err != nil {
 		return err
 	}
@@ -231,7 +258,27 @@ func (s *ChromecastService) RunBoardCast(
 
 	defer client.Close()
 
-	return s.refreshBoardCast(ctx, client, deviceID, start, windowMinutes, stopNumber)
+	return s.refreshBoardCast(
+		ctx,
+		client,
+		deviceID,
+		start,
+		windowMinutes,
+		stopNumber,
+		timeline,
+	)
+}
+
+func (s *ChromecastService) timelineFor(order, intro string) (*Timeline, error) {
+	s.mu.Lock()
+	provider := s.boardProvider
+	s.mu.Unlock()
+
+	if provider == nil {
+		return nil, fmt.Errorf("board provider is not configured")
+	}
+
+	return provider.ResolveTimelineForCast(order, intro)
 }
 
 func (s *ChromecastService) refreshBoardCast(
@@ -241,11 +288,23 @@ func (s *ChromecastService) refreshBoardCast(
 	start time.Time,
 	windowMinutes int,
 	stopNumber string,
+	timeline *Timeline,
 ) error {
-	for minute := 1; minute < windowMinutes; minute++ {
-		nextMinute := start.Add(time.Duration(minute) * time.Minute)
+	if timeline == nil {
+		return fmt.Errorf("board timeline is not configured")
+	}
 
-		timer := time.NewTimer(time.Until(nextMinute))
+	deadline := start.Add(time.Duration(windowMinutes) * time.Minute)
+
+	now := time.Now()
+
+	for now.Before(deadline) {
+		boundary := timeline.NextBoundary(start, now)
+		if !boundary.Before(deadline) {
+			break
+		}
+
+		timer := time.NewTimer(time.Until(boundary))
 
 		select {
 		case <-ctx.Done():
@@ -255,7 +314,12 @@ func (s *ChromecastService) refreshBoardCast(
 		case <-timer.C:
 		}
 
-		imageURL, err := s.boardURL(ctx, start, nextMinute, stopNumber)
+		now = time.Now()
+		if !now.Before(deadline) {
+			break
+		}
+
+		imageURL, err := s.boardURL(ctx, start, now, stopNumber, timeline)
 		if err != nil {
 			log.Printf("Chromecast: rendering board failed: %v", err)
 			continue
@@ -292,7 +356,12 @@ func (s *ChromecastService) boardURL(
 	sessionStart time.Time,
 	renderTime time.Time,
 	stopNumber string,
+	timeline *Timeline,
 ) (string, error) {
+	if timeline == nil {
+		return "", fmt.Errorf("board timeline is not configured")
+	}
+
 	s.mu.Lock()
 	provider := s.boardProvider
 	if stopNumber == "" {
@@ -304,7 +373,11 @@ func (s *ChromecastService) boardURL(
 		return "", fmt.Errorf("board provider is not configured")
 	}
 
-	return provider.BoardURL(ctx, sessionStart, renderTime, stopNumber)
+	return provider.BoardURLForTimeline(ctx, BoardRenderRequest{
+		SessionStart: sessionStart,
+		RenderTime:   renderTime,
+		Timeline:     timeline,
+	}, stopNumber)
 }
 
 func (s *ChromecastService) connectBoardRetry(
