@@ -60,41 +60,88 @@ func (e viewEntry) String() string {
 }
 
 func parseViewExpression(value string) (viewEntry, error) {
+	name, parts, err := splitViewExpression(value)
+	if err != nil {
+		return viewEntry{}, err
+	}
+
+	return parseViewEntryParts(name, parts)
+}
+
+func splitViewExpression(value string) (string, []string, error) {
 	trimmed := strings.TrimSpace(value)
 	parts := strings.Split(trimmed, ":")
 
 	if len(parts) > 3 {
-		return viewEntry{}, fmt.Errorf(
+		return "", nil, fmt.Errorf(
 			"invalid view expression %q: expected view[:duration[:refresh]]",
 			value,
 		)
 	}
 
-	entry := viewEntry{Name: strings.TrimSpace(parts[0])}
-
-	if entry.Name == "" {
-		return viewEntry{}, fmt.Errorf("invalid view expression %q: view name is empty", value)
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return "", nil, fmt.Errorf("invalid view expression %q: view name is empty", value)
 	}
 
-	if len(parts) >= 2 {
-		duration, err := parseEntryDuration(entry.Name, "duration", parts[1])
-		if err != nil {
+	return name, parts, nil
+}
+
+type durationFieldSpec struct {
+	field  string
+	raw    string
+	target **time.Duration
+}
+
+func parseViewEntryParts(name string, parts []string) (viewEntry, error) {
+	entry := viewEntry{Name: name}
+	specs := buildDurationSpecs(parts, &entry)
+
+	for _, spec := range specs {
+		if err := assignDurationField(name, spec.field, spec.raw, spec.target); err != nil {
 			return viewEntry{}, err
 		}
-
-		entry.Duration = &duration
-	}
-
-	if len(parts) == 3 {
-		refresh, err := parseEntryDuration(entry.Name, "refresh", parts[2])
-		if err != nil {
-			return viewEntry{}, err
-		}
-
-		entry.Refresh = &refresh
 	}
 
 	return entry, nil
+}
+
+func buildDurationSpecs(parts []string, entry *viewEntry) []durationFieldSpec {
+	specs := make([]durationFieldSpec, 0, 2)
+
+	if len(parts) >= 2 {
+		specs = append(specs, durationFieldSpec{
+			field:  "duration",
+			raw:    parts[1],
+			target: &entry.Duration,
+		})
+	}
+
+	if len(parts) == 3 {
+		specs = append(specs, durationFieldSpec{
+			field:  "refresh",
+			raw:    parts[2],
+			target: &entry.Refresh,
+		})
+	}
+
+	return specs
+}
+
+func assignDurationField(
+	viewName string,
+	fieldName string,
+	raw string,
+	target **time.Duration,
+) error {
+	parsed, err := parseEntryDuration(viewName, fieldName, raw)
+	if err != nil {
+		return err
+	}
+
+	*target = &parsed
+
+	return nil
 }
 
 func parseEntryDuration(name, field string, value string) (time.Duration, error) {
@@ -138,28 +185,11 @@ type BoardSlot struct {
 }
 
 func (tl *Timeline) At(start, t time.Time) BoardSlot {
-	elapsed := t.Sub(start)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(t.Sub(start), 0)
 
 	introTotal := tl.IntroTotal()
 	if elapsed < introTotal {
-		offset := elapsed
-
-		for stepIndex, step := range tl.Intro {
-			if offset < step.Duration {
-				tickIndex := int(offset / step.Refresh)
-
-				return BoardSlot{
-					Panel: step.Panel,
-					Step:  stepIndex,
-					Tick:  tickIndex,
-				}
-			}
-
-			offset -= step.Duration
-		}
+		return slotAtOffset(tl.Intro, elapsed, 0, BoardSlot{})
 	}
 
 	total := tl.Total()
@@ -172,23 +202,35 @@ func (tl *Timeline) At(start, t time.Time) BoardSlot {
 		offset += total
 	}
 
-	introLen := len(tl.Intro)
+	fallback := BoardSlot{}
+	if len(tl.Steps) > 0 {
+		fallback = BoardSlot{Panel: tl.Steps[len(tl.Steps)-1].Panel}
+	}
 
-	for stepIndex, step := range tl.Steps {
-		if offset < step.Duration {
-			tickIndex := int(offset / step.Refresh)
+	return slotAtOffset(tl.Steps, offset, len(tl.Intro), fallback)
+}
 
+func slotAtOffset(
+	steps []TimelineStep,
+	offset time.Duration,
+	stepOffset int,
+	fallback BoardSlot,
+) BoardSlot {
+	remaining := offset
+
+	for idx, step := range steps {
+		if remaining < step.Duration {
 			return BoardSlot{
 				Panel: step.Panel,
-				Step:  introLen + stepIndex,
-				Tick:  tickIndex,
+				Step:  stepOffset + idx,
+				Tick:  int(remaining / step.Refresh),
 			}
 		}
 
-		offset -= step.Duration
+		remaining -= step.Duration
 	}
 
-	return BoardSlot{Panel: tl.Steps[len(tl.Steps)-1].Panel}
+	return fallback
 }
 
 func (tl *Timeline) Total() time.Duration {
@@ -237,33 +279,11 @@ func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
 		return t.Add(time.Minute)
 	}
 
-	elapsed := t.Sub(start)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(t.Sub(start), 0)
 
 	if elapsed < introTotal {
-		offset := elapsed
-		stepStart := time.Duration(0)
-
-		for _, step := range tl.Intro {
-			if offset >= step.Duration {
-				offset -= step.Duration
-				stepStart += step.Duration
-
-				continue
-			}
-
-			nextTick := (offset/step.Refresh + 1) * step.Refresh
-
-			if nextTick < step.Duration {
-				return start.Add(stepStart + nextTick)
-			}
-
-			return start.Add(stepStart + step.Duration)
-		}
-
-		return start.Add(introTotal)
+		delta := nextBoundaryInSteps(tl.Intro, elapsed, introTotal)
+		return start.Add(delta)
 	}
 
 	if total <= 0 {
@@ -271,31 +291,38 @@ func (tl *Timeline) NextBoundary(start, t time.Time) time.Time {
 	}
 
 	loopElapsed := elapsed - introTotal
-
 	cycleBase := loopElapsed - loopElapsed%total
-
 	offset := loopElapsed % total
+	delta := nextBoundaryInSteps(tl.Steps, offset, total)
 
+	return start.Add(introTotal + cycleBase + delta)
+}
+
+func nextBoundaryInSteps(
+	steps []TimelineStep,
+	offset time.Duration,
+	sectionTotal time.Duration,
+) time.Duration {
+	remaining := offset
 	stepStart := time.Duration(0)
 
-	for _, step := range tl.Steps {
-		if offset >= step.Duration {
-			offset -= step.Duration
+	for _, step := range steps {
+		if remaining >= step.Duration {
+			remaining -= step.Duration
 			stepStart += step.Duration
 
 			continue
 		}
 
-		nextTick := (offset/step.Refresh + 1) * step.Refresh
-
+		nextTick := (remaining/step.Refresh + 1) * step.Refresh
 		if nextTick < step.Duration {
-			return start.Add(introTotal + cycleBase + stepStart + nextTick)
+			return stepStart + nextTick
 		}
 
-		return start.Add(introTotal + cycleBase + stepStart + step.Duration)
+		return stepStart + step.Duration
 	}
 
-	return start.Add(introTotal + cycleBase + total)
+	return sectionTotal
 }
 
 func (tl *Timeline) validate() error {
@@ -387,11 +414,23 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 	}
 
 	var file timelineFile
-
 	if err := yaml.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("parsing board timeline: %w", err)
 	}
 
+	catalog := newCatalogWithDefaults()
+	if err := catalog.populateFromFile(&file); err != nil {
+		return nil, err
+	}
+
+	if err := catalog.validateNames(); err != nil {
+		return nil, err
+	}
+
+	return catalog, nil
+}
+
+func newCatalogWithDefaults() *TimelineCatalog {
 	catalog := &TimelineCatalog{
 		views:   defaultViews(),
 		presets: map[string][]viewEntry{},
@@ -401,38 +440,44 @@ func LoadTimelineCatalog(path string) (*TimelineCatalog, error) {
 		catalog.presets[name] = entriesForNames(entries)
 	}
 
-	if err := catalog.loadViews(&file.Views); err != nil {
-		return nil, err
+	return catalog
+}
+
+func (c *TimelineCatalog) populateFromFile(file *timelineFile) error {
+	if err := c.loadViews(&file.Views); err != nil {
+		return err
 	}
 
-	for name, node := range file.Presets {
+	if err := c.loadPresets(file.Presets); err != nil {
+		return err
+	}
+
+	order, err := c.decodeOrder(&file.Order)
+	if err != nil {
+		return err
+	}
+	c.order = order
+
+	intro, err := c.decodeIntro(&file.Intro)
+	if err != nil {
+		return err
+	}
+	c.intro = intro
+
+	return nil
+}
+
+func (c *TimelineCatalog) loadPresets(rawPresets map[string]yaml.Node) error {
+	for name, node := range rawPresets {
 		order, err := decodeViewList(&node)
 		if err != nil {
-			return nil, fmt.Errorf("preset %q: %w", name, err)
+			return fmt.Errorf("preset %q: %w", name, err)
 		}
 
-		catalog.presets[name] = order
+		c.presets[name] = order
 	}
 
-	order, err := catalog.decodeOrder(&file.Order)
-	if err != nil {
-		return nil, err
-	}
-
-	catalog.order = order
-
-	intro, err := catalog.decodeIntro(&file.Intro)
-	if err != nil {
-		return nil, err
-	}
-
-	catalog.intro = intro
-
-	if err := catalog.validateNames(); err != nil {
-		return nil, err
-	}
-
-	return catalog, nil
+	return nil
 }
 
 func (c *TimelineCatalog) validateNames() error {
@@ -555,16 +600,7 @@ func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]viewEntry, error) {
 	}
 
 	if node.Kind == yaml.ScalarNode {
-		if node.Tag == "!!null" || strings.TrimSpace(node.Value) == "" {
-			return nil, nil
-		}
-
-		preset, err := c.preset(strings.TrimSpace(node.Value))
-		if err != nil {
-			return nil, fmt.Errorf("intro: %w", err)
-		}
-
-		return append([]viewEntry(nil), preset...), nil
+		return c.decodeIntroPreset(node)
 	}
 
 	if node.Kind == yaml.SequenceNode && len(node.Content) == 0 {
@@ -577,6 +613,19 @@ func (c *TimelineCatalog) decodeIntro(node *yaml.Node) ([]viewEntry, error) {
 	}
 
 	return views, nil
+}
+
+func (c *TimelineCatalog) decodeIntroPreset(node *yaml.Node) ([]viewEntry, error) {
+	if node.Tag == "!!null" || strings.TrimSpace(node.Value) == "" {
+		return nil, nil
+	}
+
+	preset, err := c.preset(strings.TrimSpace(node.Value))
+	if err != nil {
+		return nil, fmt.Errorf("intro: %w", err)
+	}
+
+	return append([]viewEntry(nil), preset...), nil
 }
 
 func (c *TimelineCatalog) preset(name string) ([]viewEntry, error) {
@@ -597,12 +646,6 @@ func (c *TimelineCatalog) preset(name string) ([]viewEntry, error) {
 	)
 }
 
-// decodeViewList decodes a sequence of view entries. Each entry may be:
-//   - a plain view name: "weather" or "bus.map" (legacy dot form)
-//   - a grouped name mapping: "bus: schedule"
-//   - a view with duration/refresh overrides: "weather: {duration: 30s}"
-//   - a grouped view with overrides:
-//     "bus: schedule: {duration: 2m, refresh: 15s}"
 func decodeViewList(node *yaml.Node) ([]viewEntry, error) {
 	if node.Kind != yaml.SequenceNode {
 		return nil, fmt.Errorf("expected a list of view entries")
@@ -652,53 +695,59 @@ func decodeViewEntryMapping(item *yaml.Node) (viewEntry, error) {
 	}
 
 	name := strings.TrimSpace(item.Content[0].Value)
-	value := item.Content[1]
-
 	if name == "" {
 		return viewEntry{}, fmt.Errorf("view name is empty")
 	}
 
+	value := item.Content[1]
 	switch value.Kind {
 	case yaml.ScalarNode:
-		if value.Tag == "!!null" || strings.TrimSpace(value.Value) == "" {
-			return viewEntry{}, fmt.Errorf("view %q: expected a view name", name)
-		}
-
-		// Grouped name: "bus: schedule" resolves to "bus.schedule".
-		return viewEntry{Name: name + "." + strings.TrimSpace(value.Value)}, nil
+		return decodeGroupedViewScalar(name, value)
 	case yaml.MappingNode:
 		if isViewSettingsMapping(value) {
-			// View with overrides: "weather: {duration: 30s, refresh: 10s}".
 			return viewEntryFromSettings(name, value)
 		}
 
-		// Grouped view with overrides: "bus: schedule: {duration: 2m}".
-		if len(value.Content) != 2 {
-			return viewEntry{}, fmt.Errorf(
-				"view %q: expected a single entry, got %d",
-				name,
-				len(value.Content)/2,
-			)
-		}
-
-		viewName := strings.TrimSpace(value.Content[0].Value)
-		settings := value.Content[1]
-
-		if settings.Kind != yaml.MappingNode || !isViewSettingsMapping(settings) {
-			return viewEntry{}, fmt.Errorf(
-				"view %s.%s: expected duration/refresh settings",
-				name,
-				viewName,
-			)
-		}
-
-		return viewEntryFromSettings(name+"."+viewName, settings)
+		return decodeGroupedViewSettings(name, value)
 	default:
 		return viewEntry{}, fmt.Errorf(
 			"view %q: expected a view name, group view, or duration/refresh settings",
 			name,
 		)
 	}
+}
+
+func decodeGroupedViewScalar(prefix string, value *yaml.Node) (viewEntry, error) {
+	if value.Tag == "!!null" || strings.TrimSpace(value.Value) == "" {
+		return viewEntry{}, fmt.Errorf("view %q: expected a view name", prefix)
+	}
+
+	// Grouped name: "bus: schedule" resolves to "bus.schedule".
+	return viewEntry{Name: prefix + "." + strings.TrimSpace(value.Value)}, nil
+}
+
+func decodeGroupedViewSettings(prefix string, value *yaml.Node) (viewEntry, error) {
+	// Grouped view with overrides: "bus: schedule: {duration: 2m}".
+	if len(value.Content) != 2 {
+		return viewEntry{}, fmt.Errorf(
+			"view %q: expected a single entry, got %d",
+			prefix,
+			len(value.Content)/2,
+		)
+	}
+
+	viewName := strings.TrimSpace(value.Content[0].Value)
+	settings := value.Content[1]
+
+	if settings.Kind != yaml.MappingNode || !isViewSettingsMapping(settings) {
+		return viewEntry{}, fmt.Errorf(
+			"view %s.%s: expected duration/refresh settings",
+			prefix,
+			viewName,
+		)
+	}
+
+	return viewEntryFromSettings(prefix+"."+viewName, settings)
 }
 
 func viewEntryFromSettings(name string, node *yaml.Node) (viewEntry, error) {
@@ -708,29 +757,8 @@ func viewEntryFromSettings(name string, node *yaml.Node) (viewEntry, error) {
 		key := strings.TrimSpace(node.Content[i].Value)
 		value := strings.TrimSpace(node.Content[i+1].Value)
 
-		switch key {
-		case "duration":
-			if value == "" {
-				return viewEntry{}, fmt.Errorf("view %s: missing duration", name)
-			}
-
-			duration, err := parseEntryDuration(name, "duration", value)
-			if err != nil {
-				return viewEntry{}, err
-			}
-
-			entry.Duration = &duration
-		case "refresh":
-			if value == "" {
-				return viewEntry{}, fmt.Errorf("view %s: missing refresh", name)
-			}
-
-			refresh, err := parseEntryDuration(name, "refresh", value)
-			if err != nil {
-				return viewEntry{}, err
-			}
-
-			entry.Refresh = &refresh
+		if err := applyViewEntrySetting(name, &entry, key, value); err != nil {
+			return viewEntry{}, err
 		}
 	}
 
@@ -744,12 +772,54 @@ func viewEntryFromSettings(name string, node *yaml.Node) (viewEntry, error) {
 	return entry, nil
 }
 
+func applyViewEntrySetting(
+	viewName string,
+	entry *viewEntry,
+	key string,
+	value string,
+) error {
+	switch key {
+	case "duration":
+		return assignDurationField(viewName, "duration", value, &entry.Duration)
+	case "refresh":
+		return assignDurationField(viewName, "refresh", value, &entry.Refresh)
+	default:
+		return nil
+	}
+}
+
 type viewSettingsFile struct {
 	Duration string `yaml:"duration"`
 	Refresh  string `yaml:"refresh"`
 }
 
 func (c *TimelineCatalog) loadViews(views *yaml.Node) error {
+	if err := validateViewsRootNode(views); err != nil {
+		return err
+	}
+
+	if views == nil {
+		return nil
+	}
+
+	if views.Kind == 0 {
+		return nil
+	}
+
+	if views.Kind == yaml.ScalarNode && views.Value == "" {
+		return nil
+	}
+
+	for i := 0; i < len(views.Content); i += 2 {
+		if err := c.loadViewEntry(views.Content[i].Value, views.Content[i+1]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateViewsRootNode(views *yaml.Node) error {
 	if views == nil || views.Kind == 0 {
 		return nil
 	}
@@ -762,42 +832,37 @@ func (c *TimelineCatalog) loadViews(views *yaml.Node) error {
 		return fmt.Errorf("views must be a mapping of view settings")
 	}
 
-	for i := 0; i < len(views.Content); i += 2 {
-		name := views.Content[i].Value
-		entry := views.Content[i+1]
+	return nil
+}
 
-		if isViewSettingsMapping(entry) {
-			if err := c.applyViewSettings(name, entry); err != nil {
-				return err
-			}
+func (c *TimelineCatalog) loadViewEntry(name string, entry *yaml.Node) error {
+	if isViewSettingsMapping(entry) {
+		return c.applyViewSettings(name, entry)
+	}
 
-			continue
+	if entry.Kind == yaml.MappingNode {
+		return c.loadViewGroupMapping(name, entry)
+	}
+
+	return fmt.Errorf("view %q: expected view settings", name)
+}
+
+func (c *TimelineCatalog) loadViewGroupMapping(groupName string, groupNode *yaml.Node) error {
+	for j := 0; j < len(groupNode.Content); j += 2 {
+		subName := groupNode.Content[j].Value
+		settings := groupNode.Content[j+1]
+
+		if !isViewSettingsMapping(settings) {
+			return fmt.Errorf(
+				"view %s.%s: expected duration/refresh settings",
+				groupName,
+				subName,
+			)
 		}
 
-		if entry.Kind == yaml.MappingNode {
-			for j := 0; j < len(entry.Content); j += 2 {
-				subName := entry.Content[j].Value
-				settings := entry.Content[j+1]
-
-				if !isViewSettingsMapping(settings) {
-					return fmt.Errorf(
-						"view %s.%s: expected duration/refresh settings",
-						name,
-						subName,
-					)
-				}
-
-				qualifiedName := name + "." + subName
-
-				if err := c.applyViewSettings(qualifiedName, settings); err != nil {
-					return err
-				}
-			}
-
-			continue
+		if err := c.applyViewSettings(groupName+"."+subName, settings); err != nil {
+			return err
 		}
-
-		return fmt.Errorf("view %q: expected view settings", name)
 	}
 
 	return nil
@@ -828,48 +893,88 @@ func (c *TimelineCatalog) applyViewSettings(name string, node *yaml.Node) error 
 	}
 
 	var settings viewSettingsFile
-
 	if err := node.Decode(&settings); err != nil {
 		return fmt.Errorf("view %s: %w", name, err)
 	}
 
-	step, ok := c.views[panel]
-	if !ok {
-		duration, refresh := defaultViewSettings(panel)
-
-		step = TimelineStep{Duration: duration, Refresh: refresh}
-	}
-
-	if settings.Duration != "" {
-		duration, err := time.ParseDuration(settings.Duration)
-		if err != nil || duration < time.Second {
-			return fmt.Errorf(
-				"view %s: invalid duration %q",
-				name,
-				settings.Duration,
-			)
-		}
-
-		step.Duration = duration
-	}
-
-	if settings.Refresh != "" {
-		refresh, err := time.ParseDuration(settings.Refresh)
-		if err != nil || refresh < timelineRefreshFloor {
-			return fmt.Errorf(
-				"view %s: invalid refresh %q (minimum %s)",
-				name,
-				settings.Refresh,
-				timelineRefreshFloor,
-			)
-		}
-
-		step.Refresh = refresh
+	step := c.viewStepOrDefault(panel)
+	if err := applyStepOverrides(name, &step, settings); err != nil {
+		return err
 	}
 
 	c.views[panel] = step
 
 	return nil
+}
+
+func (c *TimelineCatalog) viewStepOrDefault(panel display.Panel) TimelineStep {
+	if step, ok := c.views[panel]; ok {
+		return step
+	}
+
+	duration, refresh := defaultViewSettings(panel)
+
+	return TimelineStep{Duration: duration, Refresh: refresh}
+}
+
+func applyStepOverrides(name string, step *TimelineStep, settings viewSettingsFile) error {
+	if err := applyDurationOverride(name, step, settings.Duration); err != nil {
+		return err
+	}
+
+	return applyRefreshOverride(name, step, settings.Refresh)
+}
+
+func applyDurationOverride(name string, step *TimelineStep, raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	duration, err := parseMinDuration(raw, time.Second, func() error {
+		return fmt.Errorf("view %s: invalid duration %q", name, raw)
+	})
+	if err != nil {
+		return err
+	}
+
+	step.Duration = duration
+
+	return nil
+}
+
+func applyRefreshOverride(name string, step *TimelineStep, raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	refresh, err := parseMinDuration(raw, timelineRefreshFloor, func() error {
+		return fmt.Errorf(
+			"view %s: invalid refresh %q (minimum %s)",
+			name,
+			raw,
+			timelineRefreshFloor,
+		)
+	})
+	if err != nil {
+		return err
+	}
+
+	step.Refresh = refresh
+
+	return nil
+}
+
+func parseMinDuration(
+	raw string,
+	minDuration time.Duration,
+	onInvalid func() error,
+) (time.Duration, error) {
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed < minDuration {
+		return 0, onInvalid()
+	}
+
+	return parsed, nil
 }
 
 func (c *TimelineCatalog) stepsForEntries(entries []viewEntry) ([]TimelineStep, error) {
@@ -1023,28 +1128,39 @@ func OpenBoardTimeline(
 	}
 
 	if catalog != nil {
-		timeline, err = catalog.Resolve("")
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return timeline, catalog, nil
+		return resolveLoadedCatalog(catalog)
 	}
 
 	if strings.TrimSpace(legacySpec) != "" {
-		schedule, err := ParseBoardSchedule(legacySpec)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return NewTimelineFromLegacySchedule(schedule), DefaultTimelineCatalog(), nil
+		return openLegacyTimeline(legacySpec)
 	}
 
 	catalog = DefaultTimelineCatalog()
-
 	timeline, err = catalog.Resolve("")
 
 	return timeline, catalog, err
+}
+
+func resolveLoadedCatalog(
+	catalog *TimelineCatalog,
+) (*Timeline, *TimelineCatalog, error) {
+	timeline, err := catalog.Resolve("")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return timeline, catalog, nil
+}
+
+func openLegacyTimeline(
+	legacySpec string,
+) (*Timeline, *TimelineCatalog, error) {
+	schedule, err := ParseBoardSchedule(legacySpec)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return NewTimelineFromLegacySchedule(schedule), DefaultTimelineCatalog(), nil
 }
 
 func DefaultTimelineCatalog() *TimelineCatalog {

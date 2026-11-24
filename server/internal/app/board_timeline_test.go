@@ -446,7 +446,11 @@ func TestNewTimelineFromLegacySchedule(t *testing.T) {
 
 func TestBoardServiceResolveTimeline(t *testing.T) {
 	// Without a catalog, alarms always fall back to the server default.
-	board := NewBoardService("", nil, nil, nil, nil, "")
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: "",
+	})
 
 	timeline, err := board.ResolveTimeline("bus-focus")
 	if err != nil {
@@ -457,7 +461,11 @@ func TestBoardServiceResolveTimeline(t *testing.T) {
 		t.Fatalf("ResolveTimeline without catalog: %+v", timeline)
 	}
 
-	board = NewBoardService("", nil, nil, nil, DefaultTimelineCatalog(), "")
+	board = NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      DefaultTimelineCatalog(),
+		TimelinePath: "",
+	})
 
 	timeline, err = board.ResolveTimeline("")
 	if err != nil || timeline == nil {
@@ -879,7 +887,11 @@ func TestBoardServiceResolveTimelineForCast(t *testing.T) {
 		t.Fatalf("LoadTimelineCatalog: %v", err)
 	}
 
-	board := NewBoardService("", nil, nil, nil, loaded, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      loaded,
+		TimelinePath: path,
+	})
 
 	// No intro requested: only the loop, even though the catalog
 	// configures a global intro.
@@ -909,7 +921,11 @@ func TestBoardServiceResolveTimelineForCast(t *testing.T) {
 	// A board without a catalog still resolves expressions from
 	// defaults, and serves its configured timeline when nothing is
 	// requested.
-	defaultBoard := NewBoardService("", nil, nil, nil, nil, "")
+	defaultBoard := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: "",
+	})
 
 	timeline, err = defaultBoard.ResolveTimelineForCast("", "")
 	if err != nil {

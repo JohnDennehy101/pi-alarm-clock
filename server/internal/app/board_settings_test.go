@@ -13,7 +13,11 @@ import (
 
 func TestBoardServiceUpdateViewSettingsPersistsAndReloads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	duration := int64(90)
 	refresh := int64(15)
@@ -59,7 +63,11 @@ func TestBoardServiceUpdateViewSettingsPersistsAndReloads(t *testing.T) {
 
 func TestBoardServiceViewSettingsValidation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	second := int64(1)
 	nine := int64(9)
@@ -98,7 +106,11 @@ func TestBoardServiceViewSettingsValidation(t *testing.T) {
 
 func TestBoardServiceOrderMutations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	if err := board.SetTimelineOrderViews([]string{"bus", "progress"}); err != nil {
 		t.Fatalf("SetTimelineOrderViews: %v", err)
@@ -141,7 +153,11 @@ func TestBoardServiceOrderMutations(t *testing.T) {
 
 func TestBoardServicePresetLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	if err := board.CreatePreset("morning", []string{"weather", "bus.map"}); err != nil {
 		t.Fatalf("CreatePreset: %v", err)
@@ -192,7 +208,11 @@ func TestBoardServicePresetLifecycle(t *testing.T) {
 
 func TestBoardServiceUpdatePresetOverridesBuiltin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	if err := board.UpdatePreset("interleaved", []string{"weather", "bus.progress"}); err != nil {
 		t.Fatalf("UpdatePreset: %v", err)
@@ -323,7 +343,11 @@ var zeroInt64 = int64(0)
 
 func TestBoardServiceIntroMutations(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	settings := board.TimelineSettings()
 	if len(settings.Intro) != 0 {
@@ -477,7 +501,11 @@ func TestSerializeCatalogGroupedEntriesWithOverrides(t *testing.T) {
 
 func TestBoardServiceSetTimelineOrderWithOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	// The per-entry compact grammar flows through the API into the YAML file.
 	if err := board.SetTimelineOrder("weather:2m:30s,bus.map:45s:15s"); err != nil {

@@ -14,7 +14,11 @@ func int64Ptr(v int64) *int64 { return &v }
 // session. The progress view rotates routes every 12 seconds.
 func TestBoardServiceWeatherIntroScenario(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "board-timeline.yml")
-	board := NewBoardService("", nil, nil, nil, nil, path)
+	board := NewBoardService("", nil, nil, BoardTimelineConfig{
+		Timeline:     nil,
+		Catalog:      nil,
+		TimelinePath: path,
+	})
 
 	if err := board.UpdateViewSettings("weather", int64Ptr(300), int64Ptr(60)); err != nil {
 		t.Fatalf("weather: %v", err)

@@ -114,6 +114,18 @@ func validateAlarm(a *alarm.Alarm) error {
 }
 
 func validateSonos(settings alarm.SonosSettings) error {
+	if err := validateSonosVolume(settings); err != nil {
+		return err
+	}
+
+	if err := validateSonosSchedule(settings); err != nil {
+		return err
+	}
+
+	return validateSonosGradualVolume(settings)
+}
+
+func validateSonosVolume(settings alarm.SonosSettings) error {
 	if settings.Volume < 0 || settings.Volume > 100 {
 		return fmt.Errorf("alarm volume must be between 0 and 100")
 	}
@@ -126,6 +138,10 @@ func validateSonos(settings alarm.SonosSettings) error {
 		return fmt.Errorf("alarm start volume must not exceed the target volume")
 	}
 
+	return nil
+}
+
+func validateSonosSchedule(settings alarm.SonosSettings) error {
 	if settings.StartOffsetMinutes < 0 || settings.StartOffsetMinutes > alarm.MaxStartOffsetMinutes {
 		return fmt.Errorf(
 			"Sonos start offset must be between 0 and %d minutes",
@@ -137,15 +153,19 @@ func validateSonos(settings alarm.SonosSettings) error {
 		return err
 	}
 
-	if err := validateSource(settings.Source); err != nil {
-		return err
+	return validateSource(settings.Source)
+}
+
+func validateSonosGradualVolume(settings alarm.SonosSettings) error {
+	if !settings.GradualVolume {
+		return nil
 	}
 
-	if settings.GradualVolume && settings.VolumeDuration < 1 {
+	if settings.VolumeDuration < 1 {
 		return fmt.Errorf("volume duration must be at least 1 minute")
 	}
 
-	if settings.GradualVolume && settings.VolumeDuration > 120 {
+	if settings.VolumeDuration > 120 {
 		return fmt.Errorf("volume duration cannot exceed 120 minutes")
 	}
 
@@ -223,6 +243,18 @@ func validateHue(settings alarm.HueSettings) error {
 		return nil
 	}
 
+	if err := validateHueLights(settings); err != nil {
+		return err
+	}
+
+	if err := validateHueBrightness(settings); err != nil {
+		return err
+	}
+
+	return validateHueColourTemp(settings)
+}
+
+func validateHueLights(settings alarm.HueSettings) error {
 	if len(settings.LightIDs) == 0 {
 		return fmt.Errorf("at least one Hue light is required")
 	}
@@ -233,10 +265,30 @@ func validateHue(settings alarm.HueSettings) error {
 		}
 	}
 
+	return nil
+}
+
+func validateHueBrightness(settings alarm.HueSettings) error {
+	if err := validateHueBrightnessLevels(settings); err != nil {
+		return err
+	}
+
+	return validateHueTiming(settings)
+}
+
+func validateHueBrightnessLevels(settings alarm.HueSettings) error {
 	if settings.StartBrightness < 0 || settings.StartBrightness > 100 {
 		return fmt.Errorf("Hue start brightness must be between 0 and 100")
 	}
 
+	if settings.Brightness < 1 || settings.Brightness > 100 {
+		return fmt.Errorf("Hue brightness must be between 1 and 100")
+	}
+
+	return nil
+}
+
+func validateHueTiming(settings alarm.HueSettings) error {
 	if settings.StartOffsetMinutes < 0 || settings.StartOffsetMinutes > alarm.MaxStartOffsetMinutes {
 		return fmt.Errorf(
 			"Hue start offset must be between 0 and %d minutes",
@@ -244,16 +296,19 @@ func validateHue(settings alarm.HueSettings) error {
 		)
 	}
 
-	if settings.Brightness < 1 || settings.Brightness > 100 {
-		return fmt.Errorf("Hue brightness must be between 1 and 100")
-	}
-
 	if settings.GradualBrightness && settings.BrightnessDuration < 1 {
 		return fmt.Errorf("Hue brightness duration must be at least 1 minute")
 	}
 
-	if settings.ColourTemperature != 0 &&
-		(settings.ColourTemperature < 2000 || settings.ColourTemperature > 6500) {
+	return nil
+}
+
+func validateHueColourTemp(settings alarm.HueSettings) error {
+	if settings.ColourTemperature == 0 {
+		return nil
+	}
+
+	if settings.ColourTemperature < 2000 || settings.ColourTemperature > 6500 {
 		return fmt.Errorf("Hue colour temperature must be between 2000 and 6500 Kelvin")
 	}
 
@@ -265,6 +320,14 @@ func validateChromecast(settings alarm.ChromecastSettings) error {
 		return nil
 	}
 
+	if err := validateChromecastTiming(settings); err != nil {
+		return err
+	}
+
+	return validateChromecastText(settings)
+}
+
+func validateChromecastTiming(settings alarm.ChromecastSettings) error {
 	if strings.TrimSpace(settings.DeviceID) == "" {
 		return fmt.Errorf("Chromecast device is required")
 	}
@@ -285,20 +348,24 @@ func validateChromecast(settings alarm.ChromecastSettings) error {
 		)
 	}
 
-	if len(settings.BoardTimeline) > 200 {
-		return fmt.Errorf("Chromecast board timeline is too long")
+	return nil
+}
+
+func validateChromecastText(settings alarm.ChromecastSettings) error {
+	if err := validateSingleLineField(settings.BoardTimeline, 200, "Chromecast board timeline"); err != nil {
+		return err
 	}
 
-	if strings.ContainsAny(settings.BoardTimeline, "\n\r") {
-		return fmt.Errorf("Chromecast board timeline must be a single value")
+	return validateSingleLineField(settings.BoardIntro, 200, "Chromecast board intro")
+}
+
+func validateSingleLineField(val string, maxLen int, label string) error {
+	if len(val) > maxLen {
+		return fmt.Errorf("%s is too long", label)
 	}
 
-	if len(settings.BoardIntro) > 200 {
-		return fmt.Errorf("Chromecast board intro is too long")
-	}
-
-	if strings.ContainsAny(settings.BoardIntro, "\n\r") {
-		return fmt.Errorf("Chromecast board intro must be a single value")
+	if strings.ContainsAny(val, "\n\r") {
+		return fmt.Errorf("%s must be a single value", label)
 	}
 
 	return nil

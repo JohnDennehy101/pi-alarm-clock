@@ -373,7 +373,11 @@ func (s *ChromecastService) boardURL(
 		return "", fmt.Errorf("board provider is not configured")
 	}
 
-	return provider.BoardURLForTimeline(ctx, sessionStart, renderTime, stopNumber, timeline)
+	return provider.BoardURLForTimeline(ctx, BoardRenderRequest{
+		SessionStart: sessionStart,
+		RenderTime:   renderTime,
+		Timeline:     timeline,
+	}, stopNumber)
 }
 
 func (s *ChromecastService) connectBoardRetry(

@@ -57,25 +57,31 @@ func (a *API) setBoardTimelineOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var viewList []string
-
 	if err := json.Unmarshal(request.Order, &viewList); err == nil {
-		if len(viewList) == 0 {
-			writeError(w, http.StatusBadRequest, "order must contain at least one view")
-			return
-		}
-
-		if err := a.services.Board.SetTimelineOrderViews(viewList); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-
-		writeJSON(w, http.StatusOK, a.services.Board.TimelineSettings())
+		a.applyTimelineOrderViews(w, viewList)
 		return
 	}
 
-	var expr string
+	a.applyTimelineOrderPreset(w, request.Order)
+}
 
-	if err := json.Unmarshal(request.Order, &expr); err != nil {
+func (a *API) applyTimelineOrderViews(w http.ResponseWriter, views []string) {
+	if len(views) == 0 {
+		writeError(w, http.StatusBadRequest, "order must contain at least one view")
+		return
+	}
+
+	if err := a.services.Board.SetTimelineOrderViews(views); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, a.services.Board.TimelineSettings())
+}
+
+func (a *API) applyTimelineOrderPreset(w http.ResponseWriter, rawOrder json.RawMessage) {
+	var expr string
+	if err := json.Unmarshal(rawOrder, &expr); err != nil {
 		writeError(w, http.StatusBadRequest, "order must be a preset name or a list of view names")
 		return
 	}
@@ -138,23 +144,11 @@ func (a *API) createBoardTimelinePreset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if len(request.Order) == 0 {
-		writeError(w, http.StatusBadRequest, "order is required")
-		return
-	}
-
-	if err := a.services.Board.CreatePreset(request.Name, request.Order); err != nil {
-		writeBoardError(w, err)
-		return
-	}
-
-	preset, err := a.services.Board.GetPreset(request.Name)
-	if err != nil {
-		writeBoardError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, preset)
+	a.saveBoardTimelinePreset(w, presetWriteRequest{
+		name:       request.Name,
+		order:      request.Order,
+		statusCode: http.StatusCreated,
+	}, a.services.Board.CreatePreset)
 }
 
 func (a *API) getBoardTimelinePreset(w http.ResponseWriter, r *http.Request) {
@@ -177,25 +171,41 @@ func (a *API) updateBoardTimelinePreset(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if len(request.Order) == 0 {
+	a.saveBoardTimelinePreset(w, presetWriteRequest{
+		name:       r.PathValue("name"),
+		order:      request.Order,
+		statusCode: http.StatusOK,
+	}, a.services.Board.UpdatePreset)
+}
+
+type presetWriteRequest struct {
+	name       string
+	order      []string
+	statusCode int
+}
+
+func (a *API) saveBoardTimelinePreset(
+	w http.ResponseWriter,
+	req presetWriteRequest,
+	save func(name string, order []string) error,
+) {
+	if len(req.order) == 0 {
 		writeError(w, http.StatusBadRequest, "order is required")
 		return
 	}
 
-	name := r.PathValue("name")
-
-	if err := a.services.Board.UpdatePreset(name, request.Order); err != nil {
+	if err := save(req.name, req.order); err != nil {
 		writeBoardError(w, err)
 		return
 	}
 
-	preset, err := a.services.Board.GetPreset(name)
+	preset, err := a.services.Board.GetPreset(req.name)
 	if err != nil {
 		writeBoardError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, preset)
+	writeJSON(w, req.statusCode, preset)
 }
 
 func (a *API) deleteBoardTimelinePreset(w http.ResponseWriter, r *http.Request) {

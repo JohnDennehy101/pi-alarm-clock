@@ -18,9 +18,11 @@ func newBoardTimelineTestAPI(t *testing.T) http.Handler {
 		"",
 		nil,
 		nil,
-		nil,
-		nil,
-		filepath.Join(t.TempDir(), "board-timeline.yml"),
+		app.BoardTimelineConfig{
+			Timeline:     nil,
+			Catalog:      nil,
+			TimelinePath: filepath.Join(t.TempDir(), "board-timeline.yml"),
+		},
 	)
 
 	a := &API{services: &app.Services{Board: board}}

@@ -39,23 +39,29 @@ func pruneOldSessions(boardsRoot string) {
 	cutoff := time.Now().Add(-boardSessionsMaxAge)
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+		pruneSessionEntry(boardsRoot, entry, cutoff)
+	}
+}
 
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
+func pruneSessionEntry(boardsRoot string, entry os.DirEntry, cutoff time.Time) {
+	if !entry.IsDir() {
+		return
+	}
 
-		if info.ModTime().Before(cutoff) {
-			if err := os.RemoveAll(filepath.Join(boardsRoot, entry.Name())); err != nil {
-				log.Printf(
-					"Boards: pruning old session %s: %v",
-					entry.Name(),
-					err,
-				)
-			}
-		}
+	info, err := entry.Info()
+	if err != nil {
+		return
+	}
+
+	if !info.ModTime().Before(cutoff) {
+		return
+	}
+
+	if err := os.RemoveAll(filepath.Join(boardsRoot, entry.Name())); err != nil {
+		log.Printf(
+			"Boards: pruning old session %s: %v",
+			entry.Name(),
+			err,
+		)
 	}
 }
