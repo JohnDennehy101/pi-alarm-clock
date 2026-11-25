@@ -160,6 +160,12 @@ func (s *ChromecastService) Status() ChromecastStatus {
 	}
 }
 
+func recoverCastPanic(scope string) {
+	if r := recover(); r != nil {
+		log.Printf("Chromecast: recovered from panic in %s: %v", scope, r)
+	}
+}
+
 func (s *ChromecastService) CastBoard(
 	ctx context.Context,
 	deviceID string,
@@ -194,6 +200,10 @@ func (s *ChromecastService) CastBoard(
 	}
 
 	go func() {
+		// A panic inside the cast client must never take down the API
+		// server; log and let the display end instead.
+		defer recoverCastPanic("board cast")
+
 		defer client.Close()
 
 		s.refreshBoardCast(

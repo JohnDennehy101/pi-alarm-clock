@@ -67,6 +67,10 @@ func (e *AlarmExecutor) StartBoardDisplay(
 	}
 
 	go func() {
+		// A panic inside the cast client must never take down the API
+		// server; log and let the alarm board end instead.
+		defer recoverCastPanic("alarm board display")
+
 		if err := e.chromecast.RunBoardCast(
 			ctx,
 			a.Chromecast.DeviceID,
