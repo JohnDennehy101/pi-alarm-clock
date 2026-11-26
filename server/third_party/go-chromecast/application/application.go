@@ -46,10 +46,20 @@ const (
 	// which is too short when the device is waking up).
 	requestWaitTimeout = 15 * time.Second
 
+	// Pi Alarm Clock local patch: how long a media LOAD waits for the
+	// receiver to acknowledge it before being treated as failed.
+	loadFailedType    = "LOAD_FAILED"
+	loadCancelledType = "LOAD_CANCELLED"
+
 	namespaceConn  = "urn:x-cast:com.google.cast.tp.connection"
 	namespaceRecv  = "urn:x-cast:com.google.cast.receiver"
 	namespaceMedia = "urn:x-cast:com.google.cast.media"
 )
+
+// Pi Alarm Clock local patch: see loadFailedType above — how long a media
+// LOAD waits for the receiver's acknowledgement. A variable so tests can
+// shorten it.
+var loadWaitTimeout = 10 * time.Second
 
 type PlayedItem struct {
 	ContentID string `json:"content_id"`
@@ -290,7 +300,14 @@ func (a *Application) recvMessages() {
 		requestID, err := jsonparser.GetInt([]byte(*msg.PayloadUtf8), "requestId")
 		if err == nil {
 			if resultChan, ok := a.resultChanMap[int(requestID)]; ok {
-				resultChan <- msg
+				// Pi Alarm Clock local patch: some receivers answer a
+				// single request with more than one correlated message;
+				// drop the extras instead of blocking the receive loop
+				// forever on a full result channel.
+				select {
+				case resultChan <- msg:
+				default:
+				}
 				// Relay the event to any user specified message funcs.
 				a.messageChan <- msg
 				continue
@@ -870,7 +887,7 @@ func (a *Application) play(filenameOrUrl string, startTime int, contentType stri
 	a.MediaStart()
 
 	// Send the command to the chromecast
-	a.sendMediaRecv(&cast.LoadMediaCommand{
+	loadCommand := &cast.LoadMediaCommand{
 		PayloadHeader: cast.LoadHeader,
 		CurrentTime:   startTime,
 		Autoplay:      true,
@@ -879,17 +896,105 @@ func (a *Application) play(filenameOrUrl string, startTime int, contentType stri
 			StreamType:  "BUFFERED",
 			ContentType: mi.contentType,
 		},
-	})
-
-	// If we should detach from waiting for media to finish playing
-	// and this is a url loaded external media, then we can exit early.
-	if (detach && isExternalMedia) || forceDetach {
-		return nil
 	}
+
+	// Pi Alarm Clock local patch (see server/third_party/go-chromecast/README):
+	// for detached external media (board frames loaded on a refresh
+	// cadence) wait for the receiver to acknowledge the LOAD instead of
+	// firing and forgetting. Without this, every receiver-side failure
+	// - the app exiting to the backdrop, a dead media session, a failed
+	// fetch - is silent: the caller believes the image loaded while the
+	// screen shows something else entirely.
+	if (detach && isExternalMedia) || forceDetach {
+		return a.loadAndWait(loadCommand)
+	}
+
+	a.sendMediaRecv(loadCommand)
 
 	// Wait until we have been notified that the media has finished playing
 	a.MediaWait()
 	return nil
+}
+
+// loadAndWait sends a media LOAD and waits for the receiver to answer it
+// (MEDIA_STATUS on success, LOAD_FAILED / LOAD_CANCELLED on failure) before
+// returning. A receiver that never answers - a dead app or media session -
+// surfaces as a timeout error, so callers can reconnect and try again.
+func (a *Application) loadAndWait(loadCommand *cast.LoadMediaCommand) error {
+	return a.waitMediaCommand(loadCommand, loadCommand.Media.ContentId)
+}
+
+// waitMediaCommand sends a media-namespace request that expects a
+// requestId-correlated response and validates that response: an explicit
+// failure (LOAD_FAILED / LOAD_CANCELLED) becomes an error, anything else
+// counts as delivered. A receiver that never answers surfaces as a
+// timeout error.
+func (a *Application) waitMediaCommand(command cast.Payload, contentID string) error {
+	if a.application == nil {
+		return ErrApplicationNotSet
+	}
+
+	result, err := a.sendAndWaitTimeout(
+		command,
+		defaultSender,
+		a.application.TransportId,
+		namespaceMedia,
+		loadWaitTimeout,
+	)
+	if err != nil {
+		return errors.Wrapf(
+			err,
+			"receiver did not acknowledge the load of %q within %s",
+			contentID,
+			loadWaitTimeout,
+		)
+	}
+
+	// Everything other than an explicit failure counts as loaded: real
+	// devices answer with a requestId-correlated MEDIA_STATUS.
+	messageType, _ := jsonparser.GetString([]byte(*result.PayloadUtf8), "type")
+	switch messageType {
+	case loadFailedType, loadCancelledType:
+		return fmt.Errorf("receiver rejected the load of %q (%s)", contentID, messageType)
+	}
+
+	return nil
+}
+
+// QueueLoadURL loads a single external URL as an autoplaying, repeating
+// single-item slideshow queue.
+//
+// Pi Alarm Clock local patch (see server/third_party/go-chromecast/README):
+// the Default Media Receiver parks plain image LOADs in a PAUSED media
+// session, and Chromecast devices return the screen to the backdrop after
+// ~10 minutes when nothing is actively playing. Slideshow queue items are
+// real playing media: the session reports PLAYING, the device's backdrop
+// timer never arms, and repeating the single item means the session cannot
+// idle even if the caller stops refreshing.
+func (a *Application) QueueLoadURL(url, contentType string, playbackDuration time.Duration) error {
+	if err := a.ensureIsDefaultMediaReceiver(); err != nil {
+		return err
+	}
+
+	a.MediaStart()
+
+	queue := &cast.QueueLoad{
+		PayloadHeader: cast.QueueLoadHeader,
+		CurrentTime:   0,
+		StartIndex:    0,
+		RepeatMode:    "REPEAT_ALL",
+		Items: []cast.QueueLoadItem{{
+			Autoplay:         true,
+			PlaybackDuration: int(playbackDuration / time.Second),
+			Media: cast.MediaItem{
+				ContentId:   url,
+				StreamType:  "BUFFERED",
+				ContentType: contentType,
+			},
+		}},
+	}
+
+	return a.waitMediaCommand(queue, url)
 }
 
 func (a *Application) LoadApp(appID, contentID string) error {
@@ -1270,17 +1375,22 @@ func (a *Application) send(payload cast.Payload, sourceID, destinationID, namesp
 }
 
 func (a *Application) sendAndWait(payload cast.Payload, sourceID, destinationID, namespace string) (*pb.CastMessage, error) {
+	// Pi Alarm Clock local patch: see requestWaitTimeout.
+	return a.sendAndWaitTimeout(payload, sourceID, destinationID, namespace, requestWaitTimeout)
+}
+
+func (a *Application) sendAndWaitTimeout(
+	payload cast.Payload,
+	sourceID, destinationID, namespace string,
+	timeout time.Duration,
+) (*pb.CastMessage, error) {
 	requestID, err := a.send(payload, sourceID, destinationID, namespace)
 	if err != nil {
 		return nil, err
 	}
 
 	// Set a timeout to wait for the response.
-	// Pi Alarm Clock local patch (see server/third_party/go-chromecast/README):
-	// 5s was too short for the receiver to acknowledge a LAUNCH when the
-	// device is waking up, surfacing as "unable to change to appID ...
-	// context deadline exceeded" and needlessly dropping the board cast.
-	ctx, cancel := context.WithTimeout(context.Background(), requestWaitTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// TODO(vishen): not concurrent safe. Not a problem at the moment

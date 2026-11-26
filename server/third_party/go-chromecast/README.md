@@ -25,6 +25,21 @@ were dropped, along with tests, mocks and testdata.
    acknowledge a receiver LAUNCH, which surfaced as
    `unable to change to appID "CC1AD845": context deadline exceeded`.
 
+3. **`application/application.go` — detached external media loads wait for
+   the receiver's acknowledgement** (`loadAndWait`, `loadWaitTimeout`).
+   Upstream fires the media `LOAD` and returns immediately, so every
+   receiver-side failure is invisible: a board refresh loop believed
+   each frame loaded while the receiver had long since failed it or
+   exited the app to the backdrop. A load now waits (10s) for the
+   correlated `MEDIA_STATUS`; `LOAD_FAILED`/`LOAD_CANCELLED` and timeouts
+   return errors so the caller can reconnect and re-launch. The
+   `application_test.go` suite pins this with a fake connection.
+
+4. **`application/application.go` — correlated responses never block the
+   receive loop.** A receiver may answer one request with more than one
+   requestId-correlated message; the extra delivery now drops instead of
+   hanging `recvMessages` forever on a full result channel.
+
 ## Applying upstream updates
 
 If a new version is ever published: diff
