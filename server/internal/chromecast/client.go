@@ -2,13 +2,17 @@ package chromecast
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vishen/go-chromecast/application"
+	pb "github.com/vishen/go-chromecast/cast/proto"
 	"github.com/vishen/go-chromecast/dns"
 )
 
@@ -92,6 +96,85 @@ type Client struct {
 	app *application.Application
 }
 
+type receiverAppState struct {
+	mu      sync.Mutex
+	lastApp string
+}
+
+func (s *receiverAppState) handleStatus(payload []byte) {
+	var status struct {
+		Status struct {
+			Applications []struct {
+				AppID       string `json:"appId"`
+				DisplayName string `json:"displayName"`
+			} `json:"applications"`
+		} `json:"status"`
+	}
+	if err := json.Unmarshal(payload, &status); err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(status.Status.Applications) == 0 {
+		if s.lastApp != "" {
+			log.Printf("Chromecast: receiver has no running app (backdrop)")
+			s.lastApp = ""
+		}
+		return
+	}
+
+	// Match the library: take the last application in the list.
+	app := status.Status.Applications[len(status.Status.Applications)-1]
+
+	if app.AppID != s.lastApp {
+		log.Printf(
+			"Chromecast: receiver app is %q (%q)",
+			app.AppID,
+			app.DisplayName,
+		)
+		s.lastApp = app.AppID
+	}
+}
+
+func parseCastMessageType(msg *pb.CastMessage) (payload []byte, msgType string, ok bool) {
+	if msg == nil || msg.PayloadUtf8 == nil {
+		return nil, "", false
+	}
+
+	payload = []byte(*msg.PayloadUtf8)
+
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &header); err != nil || header.Type == "" {
+		return nil, "", false
+	}
+
+	return payload, header.Type, true
+}
+
+func newReceiverEventWatcher() application.CastMessageFunc {
+	state := &receiverAppState{}
+
+	return func(msg *pb.CastMessage) {
+		payload, msgType, ok := parseCastMessageType(msg)
+		if !ok {
+			return
+		}
+
+		switch msgType {
+		case "CLOSE":
+			log.Printf("Chromecast: receiver closed the app session")
+		case "LOAD_FAILED", "LOAD_CANCELLED":
+			log.Printf("Chromecast: receiver reported %s for a media load", msgType)
+		case "RECEIVER_STATUS":
+			state.handleStatus(payload)
+		}
+	}
+}
+
 func Connect(ctx context.Context, device Device) (*Client, error) {
 	if net.ParseIP(device.IP) == nil {
 		return nil, fmt.Errorf("invalid Chromecast IP address: %s", device.IP)
@@ -105,6 +188,8 @@ func Connect(ctx context.Context, device Device) (*Client, error) {
 		application.WithCacheDisabled(true),
 		application.WithConnectionRetries(connectionRetries),
 	)
+
+	app.AddMessageFunc(newReceiverEventWatcher())
 
 	if err := app.Start(device.IP, device.Port); err != nil {
 		app.Close(false)

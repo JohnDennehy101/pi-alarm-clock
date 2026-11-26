@@ -19,6 +19,7 @@ const (
 	chromecastDefaultDisplayDurationMinutes = 60
 	loadRetries                             = 2
 	loadRetryDelay                          = 5 * time.Second
+	castSessionRefreshInterval              = 9 * time.Minute
 )
 
 type ChromecastStatus struct {
@@ -160,6 +161,12 @@ func (s *ChromecastService) Status() ChromecastStatus {
 	}
 }
 
+func recoverCastPanic(scope string) {
+	if r := recover(); r != nil {
+		log.Printf("Chromecast: recovered from panic in %s: %v", scope, r)
+	}
+}
+
 func (s *ChromecastService) CastBoard(
 	ctx context.Context,
 	deviceID string,
@@ -194,6 +201,10 @@ func (s *ChromecastService) CastBoard(
 	}
 
 	go func() {
+		// A panic inside the cast client must never take down the API
+		// server; log and let the display end instead.
+		defer recoverCastPanic("board cast")
+
 		defer client.Close()
 
 		s.refreshBoardCast(
@@ -296,7 +307,17 @@ func (s *ChromecastService) refreshBoardCast(
 
 	deadline := start.Add(time.Duration(windowMinutes) * time.Minute)
 
+	log.Printf(
+		"Chromecast: board session %s: intro %s + loop %s, window %dm (until %s)",
+		start.Format("2006-01-02T15:04"),
+		timeline.IntroTotal(),
+		timeline.Total(),
+		windowMinutes,
+		deadline.Format("15:04:05"),
+	)
+
 	now := time.Now()
+	lastLaunched := start
 
 	for now.Before(deadline) {
 		boundary := timeline.NextBoundary(start, now)
@@ -317,6 +338,35 @@ func (s *ChromecastService) refreshBoardCast(
 		now = time.Now()
 		if !now.Before(deadline) {
 			break
+		}
+
+		// A Chromecast returns the screen to its backdrop after roughly
+		// 10 minutes of a cast session whose media never actively plays
+		// - and the Default Media Receiver parks image loads in a
+		// PAUSED session that ignores PLAY. Restarting the receiver app
+		// just before that threshold resets the device timer: stop the
+		// app, reconnect and let the next load re-launch it.
+		if now.Sub(lastLaunched) >= castSessionRefreshInterval {
+			log.Printf(
+				"Chromecast: board session %s: cast session age %s, restarting receiver app",
+				start.Format("15:04"),
+				now.Sub(lastLaunched).Round(time.Second),
+			)
+
+			if err := client.Stop(); err != nil {
+				log.Printf("Chromecast: stopping receiver app for refresh failed: %v", err)
+			}
+
+			client.Close()
+
+			reconnected, restartErr := s.connectBoard(ctx, deviceID)
+			if restartErr != nil {
+				log.Printf("Chromecast: reconnecting for session refresh failed: %v", restartErr)
+				continue
+			}
+
+			client = reconnected
+			lastLaunched = now
 		}
 
 		imageURL, err := s.boardURL(ctx, start, now, stopNumber, timeline)
@@ -343,6 +393,12 @@ func (s *ChromecastService) refreshBoardCast(
 			}
 		}
 	}
+
+	log.Printf(
+		"Chromecast: board session %s: display window reached (deadline %s); stopping",
+		start.Format("15:04"),
+		deadline.Format("15:04:05"),
+	)
 
 	if err := client.Stop(); err != nil {
 		log.Printf("Chromecast: stopping board after display window failed: %v", err)
